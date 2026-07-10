@@ -1,0 +1,1103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>kyomei</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root {
+    --bg: #14151a;
+    --panel: #1f2128;
+    --panel-2: #262932;
+    --border: #34384a;
+    --text: #f2f2f5;
+    --muted: #9a9db0;
+    --accent: #5b8cff;
+    --danger: #ff5b6a;
+    --ok: #48c78e;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  .wrap {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 20px 16px 40px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  h1 {
+    font-size: 22px;
+    margin: 0 0 4px;
+  }
+  .subtitle {
+    color: var(--muted);
+    font-size: 14px;
+    margin-bottom: 20px;
+  }
+  .field { margin-bottom: 20px; }
+  .field label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  select, textarea {
+    font-family: inherit;
+    background: var(--panel-2);
+    border: 2px solid var(--border);
+    color: var(--text);
+    border-radius: 10px;
+    padding: 14px;
+    font-size: 17px;
+    width: 100%;
+  }
+  select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  textarea {
+    min-height: 140px;
+    resize: vertical;
+    line-height: 1.4;
+  }
+  .submit-btn {
+    font-family: inherit;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 14px;
+    padding: 20px;
+    font-size: 19px;
+    font-weight: 700;
+    width: 100%;
+    cursor: pointer;
+    margin-top: 8px;
+  }
+  .submit-btn:active { filter: brightness(1.15); }
+  .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .hidden { display: none !important; }
+
+  .status-banner {
+    padding: 16px;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 700;
+    text-align: center;
+    margin-bottom: 20px;
+  }
+  .status-banner.ok {
+    background: rgba(72,199,142,0.18);
+    border: 2px solid var(--ok);
+    color: #7fffc0;
+  }
+  .status-banner.error {
+    background: rgba(255,91,106,0.15);
+    border: 2px solid var(--danger);
+    color: #ffb3ba;
+  }
+
+  #invalid-session-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    text-align: center;
+    gap: 12px;
+  }
+  #invalid-session-screen .big-icon { font-size: 48px; }
+  #invalid-session-screen p { color: var(--muted); font-size: 16px; max-width: 320px; }
+
+  #loading-screen {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    color: var(--muted);
+  }
+
+  .session-name-header {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 14px;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+  .session-name-header strong { color: var(--text); }
+
+  .quicktap-heading-display {
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 16px;
+    line-height: 1.3;
+  }
+
+  .tap-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px;
+  }
+  .tap-btn {
+    font-family: inherit;
+    background: var(--panel-2);
+    border: 2px solid transparent;
+    color: #fff;
+    border-radius: 16px;
+    padding: 28px 12px;
+    font-size: 19px;
+    font-weight: 700;
+    cursor: pointer;
+    min-height: 96px;
+    word-break: break-word;
+  }
+  .tap-btn:active { filter: brightness(1.15); }
+  .tap-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Compact numbered layout for sessions with more than 6 options
+     (e.g. a 1-10 confidence scale) — the 2-column card grid above doesn't
+     fit that many short numeric labels well on a phone screen. */
+  .tap-grid-compact {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 10px;
+  }
+  .tap-btn-compact {
+    font-family: inherit;
+    border: 2px solid transparent;
+    color: #fff;
+    border-radius: 12px;
+    padding: 16px 4px;
+    font-size: 20px;
+    font-weight: 800;
+    cursor: pointer;
+    min-height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .tap-btn-compact:active { filter: brightness(1.15); }
+  .tap-btn-compact:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .hidden-status {
+    text-align: center;
+    color: var(--muted);
+    font-size: 16px;
+    padding: 40px 0;
+  }
+
+  .connection-banner {
+    background: rgba(255,196,0,0.12);
+    border: 1px solid #ffc400;
+    color: #ffe08a;
+    padding: 8px 14px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    text-align: center;
+  }
+
+  .status-banner.warning {
+    background: rgba(224,168,60,0.15);
+    border: 2px solid #e0a83c;
+    color: #f0c975;
+  }
+
+  .textmarkup-passage {
+    background: var(--panel-2);
+    border: 2px solid var(--border);
+    border-radius: 14px;
+    padding: 16px 18px;
+    font-size: 17px;
+    line-height: 1.9;
+    margin-bottom: 16px;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  .tm-para { margin: 0 0 14px; }
+  .tm-para:last-child { margin-bottom: 0; }
+  .tm-word { cursor: pointer; }
+  .tm-word.tm-previewing { background: rgba(91,140,255,0.18); border-radius: 3px; }
+  .tm-word.tm-highlighted { background: rgba(91,140,255,0.4); border-radius: 3px; }
+
+  .textmarkup-actions { display: flex; flex-direction: column; gap: 10px; }
+  .secondary-btn {
+    font-family: inherit;
+    background: transparent;
+    color: var(--text);
+    border: 2px solid var(--border);
+    border-radius: 14px;
+    padding: 14px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+  }
+  .secondary-btn:active { background: var(--panel-2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div id="loading-screen">Loading session…</div>
+
+  <div id="invalid-session-screen" class="hidden">
+    <div class="big-icon">⚠️</div>
+    <h1>Session not found</h1>
+    <p>This session code isn't valid — check with your tutor.</p>
+  </div>
+
+  <div id="form-screen" class="hidden">
+    <h1>kyomei</h1>
+    <div class="subtitle">Submit your response.</div>
+
+    <div class="session-name-header">Session: <strong id="session-name-display"></strong></div>
+
+    <div id="success-banner" class="status-banner ok hidden">Submitted! ✓</div>
+    <div id="error-banner" class="status-banner error hidden"></div>
+
+    <div class="field">
+      <label for="category-select">Category</label>
+      <select id="category-select"></select>
+    </div>
+
+    <div class="field">
+      <label for="scenario-input">Your response</label>
+      <textarea id="scenario-input" placeholder="Type your response…"></textarea>
+    </div>
+
+    <button class="submit-btn" id="submit-btn">Submit</button>
+  </div>
+
+  <div id="guided-screen" class="hidden">
+    <h1>kyomei</h1>
+    <div class="subtitle">Submit your response.</div>
+
+    <div class="session-name-header">Session: <strong id="guided-session-name-display"></strong></div>
+
+    <div id="guided-reconnect-banner" class="connection-banner hidden">Reconnecting…</div>
+
+    <div id="guided-waiting-status" class="hidden-status hidden">Waiting for your tutor to start</div>
+
+    <div id="guided-active-form" class="hidden">
+      <div id="guided-success-banner" class="status-banner ok hidden">Submitted! ✓</div>
+      <div id="guided-error-banner" class="status-banner error hidden"></div>
+
+      <div class="field">
+        <label id="guided-category-label" for="guided-scenario-input"></label>
+        <textarea id="guided-scenario-input" placeholder="Type your response…"></textarea>
+      </div>
+
+      <button class="submit-btn" id="guided-submit-btn">Submit</button>
+    </div>
+  </div>
+
+  <div id="textmarkup-screen" class="hidden">
+    <h1>kyomei</h1>
+    <div class="subtitle">Highlight your answer in the passage.</div>
+
+    <div class="session-name-header">Session: <strong id="textmarkup-session-name-display"></strong></div>
+
+    <div id="textmarkup-reconnect-banner" class="connection-banner hidden">Reconnecting…</div>
+
+    <div id="textmarkup-waiting-status" class="hidden-status hidden">Waiting for your tutor to start</div>
+
+    <div id="textmarkup-active-form" class="hidden">
+      <div id="textmarkup-success-banner" class="status-banner ok hidden">Submitted! ✓</div>
+      <div id="textmarkup-error-banner" class="status-banner error hidden"></div>
+      <div id="textmarkup-warning-banner" class="status-banner warning hidden"></div>
+
+      <div class="quicktap-heading-display" id="textmarkup-prompt-label"></div>
+
+      <div id="textmarkup-passage" class="textmarkup-passage"></div>
+
+      <div class="textmarkup-actions">
+        <button class="secondary-btn" type="button" id="textmarkup-clear-btn">Clear my highlights</button>
+        <button class="submit-btn" id="textmarkup-submit-btn">Submit</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="quicktap-screen" class="hidden">
+    <h1>kyomei</h1>
+    <div class="subtitle">Tap your answer.</div>
+
+    <div class="session-name-header">Session: <strong id="quicktap-session-name-display"></strong></div>
+
+    <div id="quicktap-success-banner" class="status-banner ok hidden">Submitted! ✓</div>
+    <div id="quicktap-error-banner" class="status-banner error hidden"></div>
+
+    <div id="quicktap-heading-display" class="quicktap-heading-display hidden"></div>
+
+    <div class="tap-grid" id="tap-grid"></div>
+    <div id="voted-status" class="hidden-status hidden">You've already voted on this device. Thanks!</div>
+  </div>
+
+</div>
+
+<script>
+// ======================================================================
+// CONFIG — fill in before deploying. anon/public key only — NEVER the
+// service_role key. Safe to expose in client-side code.
+// ======================================================================
+const SUPABASE_URL = 'https://pnhaxvumpnfwfaiksglx.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_wVqMh7pmnWz63FzQgW_psw_o5sEvEWt';
+// ======================================================================
+
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// A convenience fingerprint, not real identity — persists across every
+// session this browser ever visits, used only so the confidence sparkline
+// can carry forward one value per device instead of counting every retap.
+function getDeviceId() {
+  let id = localStorage.getItem('kyomei_device_id');
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem('kyomei_device_id', id);
+  }
+  return id;
+}
+const deviceId = getDeviceId();
+
+let currentSession = null;
+let currentCategories = [];
+
+function showScreen(id) {
+  ['loading-screen', 'invalid-session-screen', 'form-screen', 'quicktap-screen', 'guided-screen', 'textmarkup-screen'].forEach(s => {
+    document.getElementById(s).classList.toggle('hidden', s !== id);
+  });
+}
+
+async function init() {
+  const params = new URLSearchParams(window.location.search);
+  const sessionCode = params.get('session');
+
+  if (!sessionCode) {
+    showScreen('invalid-session-screen');
+    return;
+  }
+
+  const { data: session, error: sessionError } = await supabaseClient
+    .from('sessions')
+    .select('*')
+    .eq('session_code', sessionCode)
+    .maybeSingle();
+
+  if (sessionError || !session) {
+    showScreen('invalid-session-screen');
+    return;
+  }
+
+  currentSession = session;
+
+  if (session.quick_tap_enabled) {
+    await initQuickTap(session);
+  } else if (session.text_markup_enabled) {
+    await initTextMarkup(session);
+  } else {
+    await initTextResponse(session);
+  }
+}
+
+async function initTextResponse(session) {
+  if (session.guided_categories) {
+    await initGuidedTextResponse(session);
+  } else {
+    await initNonGuidedTextResponse(session);
+  }
+}
+
+async function initNonGuidedTextResponse(session) {
+  const { data: categories, error: catError } = await supabaseClient
+    .from('session_categories')
+    .select('*')
+    .eq('session_id', session.id)
+    .order('sort_order', { ascending: true });
+
+  if (catError || !categories || categories.length === 0) {
+    showScreen('invalid-session-screen');
+    return;
+  }
+
+  currentCategories = categories;
+
+  document.getElementById('session-name-display').textContent = session.name;
+
+  const select = document.getElementById('category-select');
+  select.innerHTML = '';
+  for (const cat of categories) {
+    const opt = document.createElement('option');
+    opt.value = cat.id;
+    opt.textContent = cat.label;
+    select.appendChild(opt);
+  }
+
+  showScreen('form-screen');
+}
+
+// ---------------- Guided category mode ----------------
+let guidedCategories = [];
+let guidedActiveCategoryId = null;
+let guidedChannel = null;
+let guidedReconnectTimer = null;
+
+async function initGuidedTextResponse(session) {
+  const { data: categories, error: catError } = await supabaseClient
+    .from('session_categories')
+    .select('*')
+    .eq('session_id', session.id)
+    .order('sort_order', { ascending: true });
+
+  if (catError || !categories || categories.length === 0) {
+    showScreen('invalid-session-screen');
+    return;
+  }
+
+  guidedCategories = categories;
+  guidedActiveCategoryId = session.active_category_id || null;
+
+  document.getElementById('guided-session-name-display').textContent = session.name;
+
+  renderGuidedState();
+  showScreen('guided-screen');
+  setupGuidedSubscription();
+}
+
+function renderGuidedState() {
+  const waitingEl = document.getElementById('guided-waiting-status');
+  const formEl = document.getElementById('guided-active-form');
+  const labelEl = document.getElementById('guided-category-label');
+
+  if (!guidedActiveCategoryId) {
+    waitingEl.classList.remove('hidden');
+    formEl.classList.add('hidden');
+    return;
+  }
+
+  waitingEl.classList.add('hidden');
+  formEl.classList.remove('hidden');
+
+  // Only the heading updates on a category switch — a half-written draft
+  // in the textarea is left alone rather than discarded (see build prompt).
+  const cat = guidedCategories.find(c => c.id === guidedActiveCategoryId);
+  labelEl.textContent = cat ? cat.label : '';
+}
+
+function setupGuidedSubscription() {
+  teardownGuidedSubscription();
+
+  guidedChannel = supabaseClient
+    .channel(`session_${currentSession.id}`)
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'sessions',
+      filter: `id=eq.${currentSession.id}`
+    }, (payload) => {
+      guidedActiveCategoryId = payload.new.active_category_id || null;
+      currentSession.active_category_id = guidedActiveCategoryId;
+      renderGuidedState();
+    })
+    .subscribe((status) => {
+      const banner = document.getElementById('guided-reconnect-banner');
+      if (status === 'SUBSCRIBED') {
+        banner.classList.add('hidden');
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        banner.classList.remove('hidden');
+        scheduleGuidedReconnect();
+      }
+    });
+}
+
+function scheduleGuidedReconnect() {
+  if (guidedReconnectTimer) return;
+  guidedReconnectTimer = setTimeout(() => {
+    guidedReconnectTimer = null;
+    if (currentSession && currentSession.guided_categories && !document.getElementById('guided-screen').classList.contains('hidden')) {
+      setupGuidedSubscription();
+    }
+  }, 3000);
+}
+
+function teardownGuidedSubscription() {
+  if (guidedChannel) {
+    supabaseClient.removeChannel(guidedChannel);
+    guidedChannel = null;
+  }
+  if (guidedReconnectTimer) {
+    clearTimeout(guidedReconnectTimer);
+    guidedReconnectTimer = null;
+  }
+}
+
+let guidedSuccessTimer = null;
+
+document.getElementById('guided-submit-btn').addEventListener('click', async () => {
+  const scenarioEl = document.getElementById('guided-scenario-input');
+  const errorBanner = document.getElementById('guided-error-banner');
+  const successBanner = document.getElementById('guided-success-banner');
+
+  errorBanner.classList.add('hidden');
+  successBanner.classList.add('hidden');
+
+  const scenario = scenarioEl.value.trim();
+
+  if (!scenario) {
+    errorBanner.textContent = "Don't forget to describe the scenario.";
+    errorBanner.classList.remove('hidden');
+    return;
+  }
+
+  if (!guidedActiveCategoryId) {
+    errorBanner.textContent = "Your tutor hasn't started this yet.";
+    errorBanner.classList.remove('hidden');
+    return;
+  }
+
+  const btn = document.getElementById('guided-submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Submitting…';
+
+  // Always the live value from the realtime subscription, not whatever
+  // was active when the page loaded or the student started typing.
+  const { error } = await supabaseClient
+    .from('friction_pool')
+    .insert({
+      session_id: currentSession.id,
+      category_id: guidedActiveCategoryId,
+      scenario
+    });
+
+  btn.disabled = false;
+  btn.textContent = 'Submit';
+
+  if (error) {
+    errorBanner.textContent = 'Could not submit — check your connection and try again.';
+    errorBanner.classList.remove('hidden');
+    return;
+  }
+
+  scenarioEl.value = '';
+  successBanner.classList.remove('hidden');
+  if (guidedSuccessTimer) clearTimeout(guidedSuccessTimer);
+  guidedSuccessTimer = setTimeout(() => {
+    successBanner.classList.add('hidden');
+  }, 2500);
+});
+
+// ---------------- Text markup mode ----------------
+let textMarkupPrompts = [];
+let textMarkupActivePromptId = null;
+let textMarkupChannel = null;
+let textMarkupReconnectTimer = null;
+let currentRanges = [];
+let totalWordCount = 0;
+let textMarkupSuccessTimer = null;
+let textMarkupSubmitting = false;
+
+async function initTextMarkup(session) {
+  const { data: prompts, error: promptError } = await supabaseClient
+    .from('text_markup_prompts')
+    .select('*')
+    .eq('session_id', session.id)
+    .order('sort_order', { ascending: true });
+
+  if (promptError || !prompts || prompts.length === 0) {
+    showScreen('invalid-session-screen');
+    return;
+  }
+
+  textMarkupPrompts = prompts;
+  textMarkupActivePromptId = session.active_prompt_id || null;
+
+  document.getElementById('textmarkup-session-name-display').textContent = session.name;
+
+  const { html, totalWords } = buildPassageMarkup(session.passage_text || '');
+  document.getElementById('textmarkup-passage').innerHTML = html;
+  totalWordCount = totalWords;
+
+  await renderTextMarkupState();
+  showScreen('textmarkup-screen');
+  setupTextMarkupSubscription();
+}
+
+function buildPassageMarkup(passageText) {
+  const paragraphs = passageText.split('\n').map(p => p.trim()).filter(Boolean);
+  let wordIndex = 0;
+  const paraHtml = paragraphs.map(para => {
+    const words = para.split(/\s+/).filter(Boolean);
+    const spans = words.map(word => {
+      const span = `<span class="tm-word" data-word-index="${wordIndex}">${escapeHtml(word)}</span>`;
+      wordIndex++;
+      return span;
+    });
+    return `<p class="tm-para">${spans.join(' ')}</p>`;
+  });
+  return { html: paraHtml.join(''), totalWords: wordIndex };
+}
+
+async function renderTextMarkupState() {
+  const waitingEl = document.getElementById('textmarkup-waiting-status');
+  const formEl = document.getElementById('textmarkup-active-form');
+  const labelEl = document.getElementById('textmarkup-prompt-label');
+
+  document.getElementById('textmarkup-error-banner').classList.add('hidden');
+  document.getElementById('textmarkup-warning-banner').classList.add('hidden');
+  document.getElementById('textmarkup-success-banner').classList.add('hidden');
+
+  if (!textMarkupActivePromptId) {
+    waitingEl.classList.remove('hidden');
+    formEl.classList.add('hidden');
+    currentRanges = [];
+    renderHighlights();
+    return;
+  }
+
+  waitingEl.classList.add('hidden');
+  formEl.classList.remove('hidden');
+
+  const prompt = textMarkupPrompts.find(p => p.id === textMarkupActivePromptId);
+  labelEl.textContent = prompt ? prompt.prompt_text : '';
+
+  currentRanges = [];
+  renderHighlights();
+
+  // Restore the student's own prior submission for this prompt, if any.
+  // Goes through a scoped RPC rather than a direct table select — the
+  // anon SELECT policy on text_markup_responses only allows reads once
+  // results_revealed is true, and a student must see their own prior
+  // highlights before that gate ever fires.
+  const { data: existing } = await supabaseClient.rpc('get_own_text_markup_response', {
+    p_session_id: currentSession.id,
+    p_prompt_id: textMarkupActivePromptId,
+    p_device_id: deviceId
+  });
+
+  if (existing && existing.length > 0 && existing[0].spans) {
+    currentRanges = existing[0].spans;
+    renderHighlights();
+  }
+}
+
+function getIntersectingWordRange(passageEl) {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
+
+  const range = selection.getRangeAt(0);
+  if (!passageEl.contains(range.commonAncestorContainer)) return null;
+
+  const wordEls = passageEl.querySelectorAll('.tm-word');
+  let start = null;
+  let end = null;
+  wordEls.forEach(wordEl => {
+    if (range.intersectsNode(wordEl)) {
+      const idx = parseInt(wordEl.dataset.wordIndex, 10);
+      if (start === null || idx < start) start = idx;
+      if (end === null || idx > end) end = idx;
+    }
+  });
+
+  if (start === null) return null;
+  return { start, end };
+}
+
+function renderHighlights() {
+  const passageEl = document.getElementById('textmarkup-passage');
+  const wordEls = passageEl.querySelectorAll('.tm-word');
+  wordEls.forEach(el => {
+    el.classList.remove('tm-highlighted', 'tm-previewing');
+    const idx = parseInt(el.dataset.wordIndex, 10);
+    if (currentRanges.some(r => idx >= r.start && idx <= r.end)) {
+      el.classList.add('tm-highlighted');
+    }
+  });
+}
+
+function previewCurrentSelection() {
+  const passageEl = document.getElementById('textmarkup-passage');
+  const wordEls = passageEl.querySelectorAll('.tm-word');
+  wordEls.forEach(el => el.classList.remove('tm-previewing'));
+
+  const range = getIntersectingWordRange(passageEl);
+  if (!range) return;
+
+  wordEls.forEach(el => {
+    const idx = parseInt(el.dataset.wordIndex, 10);
+    if (idx >= range.start && idx <= range.end) {
+      el.classList.add('tm-previewing');
+    }
+  });
+}
+
+function commitCurrentSelection() {
+  const passageEl = document.getElementById('textmarkup-passage');
+  const range = getIntersectingWordRange(passageEl);
+
+  if (range) {
+    currentRanges.push(range);
+    checkSoftGuard();
+  }
+
+  window.getSelection().removeAllRanges();
+  renderHighlights();
+}
+
+function checkSoftGuard() {
+  const warningBanner = document.getElementById('textmarkup-warning-banner');
+  if (totalWordCount === 0) return;
+
+  const highlightedSet = new Set();
+  currentRanges.forEach(r => {
+    for (let i = r.start; i <= r.end; i++) highlightedSet.add(i);
+  });
+
+  if (highlightedSet.size / totalWordCount > 0.5) {
+    warningBanner.textContent = "That's more than half the passage highlighted — you can still submit, but double check that's what you meant.";
+    warningBanner.classList.remove('hidden');
+  } else {
+    warningBanner.classList.add('hidden');
+  }
+}
+
+document.addEventListener('selectionchange', () => {
+  const screen = document.getElementById('textmarkup-screen');
+  if (screen.classList.contains('hidden') || !textMarkupActivePromptId) return;
+  previewCurrentSelection();
+});
+
+// Tap-to-remove — a plain tap (no drag distance, no selection formed) on a
+// word inside an existing highlight removes that whole span, a lighter
+// correction than "Clear my highlights" wiping everything.
+const TAP_MAX_DISTANCE = 10; // px
+const TAP_MAX_DURATION = 500; // ms
+let tapStart = null;
+
+function getEventPoint(e) {
+  if (e.changedTouches && e.changedTouches.length > 0) {
+    return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+  }
+  return { x: e.clientX, y: e.clientY };
+}
+
+function getWordElFromEventTarget(target) {
+  if (!target) return null;
+  const el = target.nodeType === 3 ? target.parentElement : target;
+  return el && el.closest ? el.closest('.tm-word') : null;
+}
+
+function removeSpanAtWordIndex(idx) {
+  const before = currentRanges.length;
+  currentRanges = currentRanges.filter(r => !(idx >= r.start && idx <= r.end));
+  return currentRanges.length !== before;
+}
+
+function handlePassagePointerStart(e) {
+  tapStart = {
+    ...getEventPoint(e),
+    time: Date.now(),
+    wordEl: getWordElFromEventTarget(e.target)
+  };
+}
+
+function handlePassagePointerEnd(e) {
+  if (!textMarkupActivePromptId) return;
+
+  const selection = window.getSelection();
+  const hasSelection = !!(selection && selection.rangeCount > 0 && !selection.isCollapsed);
+
+  let isTap = false;
+  if (tapStart && !hasSelection) {
+    const point = getEventPoint(e);
+    const distance = Math.hypot(point.x - tapStart.x, point.y - tapStart.y);
+    const duration = Date.now() - tapStart.time;
+    isTap = distance <= TAP_MAX_DISTANCE && duration <= TAP_MAX_DURATION;
+  }
+
+  if (isTap) {
+    const wordEl = tapStart.wordEl;
+    tapStart = null;
+    if (wordEl) {
+      const idx = parseInt(wordEl.dataset.wordIndex, 10);
+      if (removeSpanAtWordIndex(idx)) {
+        renderHighlights();
+        checkSoftGuard();
+      }
+    }
+    window.getSelection().removeAllRanges();
+    return;
+  }
+
+  tapStart = null;
+  commitCurrentSelection();
+}
+
+document.getElementById('textmarkup-passage').addEventListener('mousedown', handlePassagePointerStart);
+document.getElementById('textmarkup-passage').addEventListener('touchstart', handlePassagePointerStart);
+
+document.getElementById('textmarkup-passage').addEventListener('mouseup', handlePassagePointerEnd);
+document.getElementById('textmarkup-passage').addEventListener('touchend', handlePassagePointerEnd);
+
+document.getElementById('textmarkup-clear-btn').addEventListener('click', () => {
+  currentRanges = [];
+  renderHighlights();
+  document.getElementById('textmarkup-warning-banner').classList.add('hidden');
+});
+
+function setupTextMarkupSubscription() {
+  teardownTextMarkupSubscription();
+
+  textMarkupChannel = supabaseClient
+    .channel(`text_markup_session_${currentSession.id}`)
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'sessions',
+      filter: `id=eq.${currentSession.id}`
+    }, async (payload) => {
+      const newPromptId = payload.new.active_prompt_id || null;
+      if (newPromptId !== textMarkupActivePromptId) {
+        textMarkupActivePromptId = newPromptId;
+        currentSession.active_prompt_id = textMarkupActivePromptId;
+        await renderTextMarkupState();
+      }
+    })
+    .subscribe((status) => {
+      const banner = document.getElementById('textmarkup-reconnect-banner');
+      if (status === 'SUBSCRIBED') {
+        banner.classList.add('hidden');
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        banner.classList.remove('hidden');
+        scheduleTextMarkupReconnect();
+      }
+    });
+}
+
+function scheduleTextMarkupReconnect() {
+  if (textMarkupReconnectTimer) return;
+  textMarkupReconnectTimer = setTimeout(() => {
+    textMarkupReconnectTimer = null;
+    if (currentSession && currentSession.text_markup_enabled && !document.getElementById('textmarkup-screen').classList.contains('hidden')) {
+      setupTextMarkupSubscription();
+    }
+  }, 3000);
+}
+
+function teardownTextMarkupSubscription() {
+  if (textMarkupChannel) {
+    supabaseClient.removeChannel(textMarkupChannel);
+    textMarkupChannel = null;
+  }
+  if (textMarkupReconnectTimer) {
+    clearTimeout(textMarkupReconnectTimer);
+    textMarkupReconnectTimer = null;
+  }
+}
+
+document.getElementById('textmarkup-submit-btn').addEventListener('click', async () => {
+  const errorBanner = document.getElementById('textmarkup-error-banner');
+  const successBanner = document.getElementById('textmarkup-success-banner');
+
+  errorBanner.classList.add('hidden');
+  successBanner.classList.add('hidden');
+
+  if (!textMarkupActivePromptId) {
+    errorBanner.textContent = "Your tutor hasn't started this yet.";
+    errorBanner.classList.remove('hidden');
+    return;
+  }
+
+  if (currentRanges.length === 0) {
+    errorBanner.textContent = 'Highlight at least one part of the passage first.';
+    errorBanner.classList.remove('hidden');
+    return;
+  }
+
+  if (textMarkupSubmitting) return;
+  textMarkupSubmitting = true;
+
+  const btn = document.getElementById('textmarkup-submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Submitting…';
+
+  const { error } = await supabaseClient
+    .from('text_markup_responses')
+    .upsert({
+      session_id: currentSession.id,
+      prompt_id: textMarkupActivePromptId,
+      device_id: deviceId,
+      spans: currentRanges,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'session_id,prompt_id,device_id' });
+
+  btn.disabled = false;
+  btn.textContent = 'Submit';
+  textMarkupSubmitting = false;
+
+  if (error) {
+    errorBanner.textContent = 'Could not submit — check your connection and try again.';
+    errorBanner.classList.remove('hidden');
+    return;
+  }
+
+  successBanner.classList.remove('hidden');
+  if (textMarkupSuccessTimer) clearTimeout(textMarkupSuccessTimer);
+  textMarkupSuccessTimer = setTimeout(() => {
+    successBanner.classList.add('hidden');
+  }, 2500);
+});
+
+async function initQuickTap(session) {
+  const { data: options, error: optError } = await supabaseClient
+    .from('quick_tap_options')
+    .select('*')
+    .eq('session_id', session.id)
+    .order('sort_order', { ascending: true });
+
+  if (optError || !options || options.length === 0) {
+    showScreen('invalid-session-screen');
+    return;
+  }
+
+  document.getElementById('quicktap-session-name-display').textContent = session.name;
+
+  const headingEl = document.getElementById('quicktap-heading-display');
+  if (session.quick_tap_heading) {
+    headingEl.textContent = session.quick_tap_heading;
+    headingEl.classList.remove('hidden');
+  } else {
+    headingEl.classList.add('hidden');
+  }
+
+  const votedKey = 'voted_' + session.session_code;
+  const alreadyVoted = session.one_vote_per_device && !!localStorage.getItem(votedKey);
+
+  if (alreadyVoted) {
+    document.getElementById('tap-grid').classList.add('hidden');
+    document.getElementById('voted-status').classList.remove('hidden');
+    showScreen('quicktap-screen');
+    return;
+  }
+
+  document.getElementById('tap-grid').classList.remove('hidden');
+  document.getElementById('voted-status').classList.add('hidden');
+
+  const grid = document.getElementById('tap-grid');
+  grid.innerHTML = '';
+  const isCompact = options.length > 6;
+  grid.className = isCompact ? 'tap-grid-compact' : 'tap-grid';
+  for (const opt of options) {
+    const btn = document.createElement('button');
+    btn.className = isCompact ? 'tap-btn-compact' : 'tap-btn';
+    btn.type = 'button';
+    btn.textContent = opt.label;
+    btn.style.backgroundColor = opt.color || '#5b8cff';
+    btn.style.borderColor = opt.color || '#5b8cff';
+    btn.addEventListener('click', () => handleTap(opt.id));
+    grid.appendChild(btn);
+  }
+
+  showScreen('quicktap-screen');
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+let successTimer = null;
+
+document.getElementById('submit-btn').addEventListener('click', async () => {
+  const scenarioEl = document.getElementById('scenario-input');
+  const categorySelect = document.getElementById('category-select');
+  const errorBanner = document.getElementById('error-banner');
+  const successBanner = document.getElementById('success-banner');
+
+  errorBanner.classList.add('hidden');
+  successBanner.classList.add('hidden');
+
+  const scenario = scenarioEl.value.trim();
+  const categoryId = categorySelect.value;
+
+  if (!scenario) {
+    errorBanner.textContent = "Don't forget to describe the scenario.";
+    errorBanner.classList.remove('hidden');
+    return;
+  }
+
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Submitting…';
+
+  const { error } = await supabaseClient
+    .from('friction_pool')
+    .insert({
+      session_id: currentSession.id,
+      category_id: categoryId,
+      scenario
+    });
+
+  btn.disabled = false;
+  btn.textContent = 'Submit';
+
+  if (error) {
+    errorBanner.textContent = 'Could not submit — check your connection and try again.';
+    errorBanner.classList.remove('hidden');
+    return;
+  }
+
+  scenarioEl.value = '';
+  successBanner.classList.remove('hidden');
+  if (successTimer) clearTimeout(successTimer);
+  successTimer = setTimeout(() => {
+    successBanner.classList.add('hidden');
+  }, 2500);
+});
+
+let tapSuccessTimer = null;
+
+async function handleTap(optionId) {
+  const errorBanner = document.getElementById('quicktap-error-banner');
+  const successBanner = document.getElementById('quicktap-success-banner');
+  errorBanner.classList.add('hidden');
+
+  const allBtns = document.querySelectorAll('.tap-btn, .tap-btn-compact');
+  allBtns.forEach(b => b.disabled = true);
+
+  const { error } = await supabaseClient
+    .from('quick_tap_responses')
+    .insert({ session_id: currentSession.id, option_id: optionId, device_id: deviceId });
+
+  if (error) {
+    allBtns.forEach(b => b.disabled = false);
+    errorBanner.textContent = 'Could not submit — check your connection and try again.';
+    errorBanner.classList.remove('hidden');
+    return;
+  }
+
+  if (currentSession.one_vote_per_device) {
+    localStorage.setItem('voted_' + currentSession.session_code, optionId);
+    document.getElementById('tap-grid').classList.add('hidden');
+    document.getElementById('voted-status').classList.remove('hidden');
+  } else {
+    allBtns.forEach(b => b.disabled = false);
+  }
+
+  successBanner.classList.remove('hidden');
+  if (tapSuccessTimer) clearTimeout(tapSuccessTimer);
+  tapSuccessTimer = setTimeout(() => {
+    successBanner.classList.add('hidden');
+  }, 1500);
+}
+
+init();
+</script>
+</body>
+</html>

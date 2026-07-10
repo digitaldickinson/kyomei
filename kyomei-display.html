@@ -1,0 +1,1799 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>kyomei — Display</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<style>
+  :root {
+    --bg: #14151a;
+    --panel: #1f2128;
+    --panel-2: #262932;
+    --border: #34384a;
+    --text: #f2f2f5;
+    --muted: #9a9db0;
+    --accent: #5b8cff;
+    --danger: #ff5b6a;
+    --ok: #48c78e;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+  }
+  .hidden { display: none !important; }
+
+  .screen {
+    height: 100vh;
+    width: 100vw;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4vw;
+    text-align: center;
+  }
+
+  #connection-banner {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(255,196,0,0.15);
+    border: 1px solid #ffc400;
+    color: #ffe08a;
+    padding: 8px 20px;
+    border-radius: 999px;
+    font-size: clamp(0.8rem, 1.2vw, 1rem);
+    z-index: 1000;
+  }
+
+  /* ---- Loading / invalid ---- */
+  #loading-screen { color: var(--muted); font-size: clamp(1.2rem, 2vw, 1.8rem); }
+  #invalid-session-screen .big-icon { font-size: clamp(3rem, 6vw, 5rem); margin-bottom: 16px; }
+  #invalid-session-screen h1 { font-size: clamp(2rem, 4vw, 3.5rem); margin: 0 0 12px; }
+  #invalid-session-screen p { color: var(--muted); font-size: clamp(1.1rem, 2vw, 1.6rem); max-width: 40em; }
+
+  /* ---- Join-info component (QR + session name) — shared by the idle
+     screen and the L-triggered overlay, so they're the same thing, not
+     two copies of similar markup. ---- */
+  .join-session-name {
+    font-size: clamp(2.2rem, 5vw, 4.5rem);
+    font-weight: 800;
+    margin-bottom: 40px;
+    max-width: 90vw;
+  }
+  .join-qr-box {
+    background: #fff;
+    padding: 24px;
+    border-radius: 16px;
+    display: inline-block;
+  }
+  .join-qr-box img, .join-qr-box canvas, .join-qr-box table { display: block; }
+  .join-url {
+    margin-top: 24px;
+    color: var(--muted);
+    font-size: clamp(1rem, 1.6vw, 1.4rem);
+    word-break: break-all;
+    max-width: 60vw;
+  }
+  .join-info-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 900;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 4vw;
+  }
+
+  /* ---- Feed screen (plain + guided) ---- */
+  #feed-screen {
+    justify-content: flex-start;
+    padding-top: 3vh;
+  }
+  .feed-header {
+    width: 100%;
+    max-width: 1400px;
+    margin-bottom: 24px;
+    flex-shrink: 0;
+  }
+  .feed-session-name {
+    font-size: clamp(1.2rem, 2vw, 1.8rem);
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .feed-category-label {
+    font-size: clamp(2.4rem, 5vw, 4rem);
+    font-weight: 800;
+    margin-top: 6px;
+  }
+  .feed-list {
+    width: 100%;
+    max-width: 1400px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    overflow-y: auto;
+    flex: 1;
+    padding-bottom: 3vh;
+  }
+  .feed-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-left: 10px solid var(--accent);
+    border-radius: 16px;
+    padding: 28px 32px;
+    text-align: left;
+  }
+  .feed-card-cat {
+    font-size: clamp(0.9rem, 1.4vw, 1.2rem);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 10px;
+  }
+  .feed-card-text {
+    font-size: clamp(1.4rem, 2.4vw, 2.1rem);
+    line-height: 1.4;
+  }
+  .feed-empty-msg {
+    color: var(--muted);
+    font-size: clamp(1.4rem, 2.4vw, 2rem);
+    padding: 60px 0;
+  }
+  .feed-group-heading {
+    font-size: clamp(1rem, 1.8vw, 1.4rem);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+    margin: 20px 0 4px;
+  }
+  .feed-group-heading:first-child { margin-top: 0; }
+  .feed-view-mode-indicator {
+    display: inline-block;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: clamp(0.8rem, 1.2vw, 1rem);
+    font-weight: 600;
+    padding: 4px 14px;
+    border-radius: 999px;
+    margin-top: 8px;
+  }
+
+  /* ---- Quick-tap display ---- */
+  .quicktap-session-name {
+    font-size: clamp(1.2rem, 2vw, 1.8rem);
+    color: var(--muted);
+    font-weight: 600;
+    margin-bottom: 32px;
+  }
+  .hidden-status-lg {
+    font-size: clamp(1.8rem, 3.5vw, 3rem);
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .quicktap-display-grid {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+  }
+  .quicktap-hint {
+    margin-top: 28px;
+    color: var(--muted);
+    font-size: clamp(0.85rem, 1.2vw, 1.1rem);
+  }
+  .quicktap-buttons-view {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: clamp(16px, 2.4vh, 28px);
+    width: 100%;
+    max-width: 1100px;
+  }
+  .qtb-card {
+    border-radius: 20px;
+    padding: clamp(28px, 4vh, 48px) 24px;
+    text-align: center;
+    min-height: clamp(140px, 20vh, 220px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+  }
+  .qtb-label {
+    font-size: clamp(1.4rem, 2.6vw, 2.2rem);
+    font-weight: 700;
+    word-break: break-word;
+    margin-bottom: 12px;
+  }
+  .qtb-count {
+    font-size: clamp(2.4rem, 5vw, 4rem);
+    font-weight: 800;
+  }
+  .quicktap-bar-view {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(16px, 2.4vh, 28px);
+    width: 100%;
+    max-width: 1300px;
+  }
+  .bar-row {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+  }
+  .bar-label {
+    width: clamp(140px, 18vw, 280px);
+    flex-shrink: 0;
+    font-size: clamp(1.1rem, 1.8vw, 1.6rem);
+    font-weight: 700;
+    text-align: right;
+    word-break: break-word;
+    line-height: 1.2;
+  }
+  .bar-track {
+    flex: 1;
+    height: clamp(44px, 7vh, 76px);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    border-radius: 14px 0 0 14px;
+    transition: width 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+    width: 0%;
+  }
+  .bar-count {
+    width: clamp(70px, 8vw, 110px);
+    flex-shrink: 0;
+    font-size: clamp(1.6rem, 3vw, 2.6rem);
+    font-weight: 800;
+    color: var(--text);
+    text-align: left;
+  }
+  .quicktap-pie-view {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(32px, 5vw, 72px);
+    flex-wrap: wrap;
+  }
+  .pie-svg {
+    width: clamp(260px, 32vw, 440px);
+    height: clamp(260px, 32vw, 440px);
+    flex-shrink: 0;
+  }
+  .pie-segment {
+    transition: stroke-dasharray 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+                stroke-dashoffset 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .pie-total-num { fill: var(--text); font-size: 34px; font-weight: 800; }
+  .pie-total-label { fill: var(--muted); font-size: 13px; }
+  .pie-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    text-align: left;
+  }
+  .pie-legend-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: clamp(1.1rem, 1.8vw, 1.6rem);
+  }
+  .pie-legend-dot {
+    width: clamp(16px, 1.6vw, 22px);
+    height: clamp(16px, 1.6vw, 22px);
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .pie-legend-label { font-weight: 700; }
+  .pie-legend-count { font-weight: 800; color: var(--text); margin-left: auto; padding-left: 20px; }
+  .quicktap-sparkline-view { width: 100%; max-width: 1100px; }
+  .sparkline-summary {
+    font-size: clamp(1.2rem, 2.2vw, 1.8rem);
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+  .sparkline-summary strong { color: var(--text); font-size: clamp(2rem, 4vw, 3rem); }
+  .sparkline-svg { width: 100%; height: clamp(220px, 32vh, 360px); }
+  .sparkline-line { fill: none; stroke: var(--accent); stroke-width: 3; }
+  .sparkline-axis-label { fill: var(--muted); font-size: 11px; }
+  .quicktap-trafficlight-view {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: clamp(24px, 4vh, 48px);
+    margin-top: clamp(32px, 5vh, 64px);
+  }
+  .tl-light-row { display: flex; align-items: center; gap: clamp(24px, 3vw, 40px); }
+  .tl-circle {
+    width: clamp(68px, 10.2vw, 136px);
+    height: clamp(68px, 10.2vw, 136px);
+    border-radius: 50%;
+    flex-shrink: 0;
+    opacity: 0.3;
+    transition: opacity 0.4s ease, box-shadow 0.4s ease;
+  }
+  .tl-circle.tl-lit { opacity: 1; box-shadow: 0 0 50px 10px currentColor; }
+  .tl-info { text-align: left; }
+  .tl-label { font-size: clamp(1.6rem, 3vw, 2.6rem); font-weight: 700; }
+  .tl-count { font-size: clamp(2rem, 4vw, 3.2rem); font-weight: 800; }
+  .tl-total { margin-top: 8px; color: var(--muted); font-size: clamp(1rem, 1.6vw, 1.4rem); }
+
+  /* ---- Text markup display ---- */
+  #textmarkup-display-screen { justify-content: flex-start; padding-top: 3vh; }
+  .textmarkup-display-prompt {
+    font-size: clamp(1.6rem, 3.2vw, 2.6rem);
+    font-weight: 800;
+    margin-bottom: 24px;
+    max-width: 1400px;
+  }
+  #textmarkup-display-content { width: 100%; max-width: 1300px; }
+  .textmarkup-display-passage {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: clamp(24px, 3vw, 40px);
+    font-size: clamp(1.2rem, 1.7vw, 1.6rem);
+    line-height: 1.8;
+    text-align: left;
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+  .textmarkup-display-passage p { margin: 0 0 16px; }
+  .textmarkup-display-passage p:last-child { margin-bottom: 0; }
+  .textmarkup-display-total-count {
+    margin-bottom: 20px;
+    font-size: clamp(1.4rem, 2.6vw, 2.2rem);
+    font-weight: 700;
+    color: var(--text);
+  }
+  .textmarkup-display-community-view {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+  .tm-community-row-lg {
+    display: flex;
+    align-items: baseline;
+    gap: 20px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 16px 22px;
+    text-align: left;
+  }
+  .tm-community-count-lg {
+    font-size: clamp(1.6rem, 2.8vw, 2.4rem);
+    font-weight: 800;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  .tm-community-phrase-lg {
+    font-size: clamp(1.2rem, 1.8vw, 1.7rem);
+    color: var(--text);
+  }
+</style>
+</head>
+<body>
+
+<div id="connection-banner" class="hidden">Reconnecting…</div>
+
+<div id="loading-screen" class="screen">Loading…</div>
+
+<div id="invalid-session-screen" class="screen hidden">
+  <div class="big-icon">⚠️</div>
+  <h1>Session not found</h1>
+  <p>This session code isn't valid — check with your tutor.</p>
+</div>
+
+<div id="idle-screen" class="screen hidden">
+  <div class="join-session-name" id="idle-session-name"></div>
+  <div id="idle-qr" class="join-qr-box"></div>
+  <div class="join-url" id="idle-url-text"></div>
+</div>
+
+<div id="join-info-overlay" class="join-info-overlay hidden">
+  <div class="join-session-name" id="joininfo-session-name"></div>
+  <div id="joininfo-qr" class="join-qr-box"></div>
+  <div class="join-url" id="joininfo-url-text"></div>
+</div>
+
+<div id="feed-screen" class="screen hidden">
+  <div class="feed-header">
+    <div class="feed-session-name" id="feed-session-name"></div>
+    <div class="feed-category-label hidden" id="feed-category-label"></div>
+    <div id="feed-view-mode-indicator" class="feed-view-mode-indicator hidden">Grouped by category (press G to toggle)</div>
+  </div>
+  <div id="feed-list" class="feed-list"></div>
+  <div id="feed-empty-msg" class="feed-empty-msg hidden">Waiting for submissions…</div>
+</div>
+
+<div id="quicktap-display-screen" class="screen hidden">
+  <div class="quicktap-session-name" id="quicktap-display-session-name"></div>
+  <div class="feed-category-label hidden" id="quicktap-heading-display"></div>
+  <div id="quicktap-hidden-status" class="hidden-status-lg hidden">Collecting votes…</div>
+  <div id="quicktap-display-grid" class="quicktap-display-grid hidden">
+    <div id="quicktap-buttons-view" class="quicktap-buttons-view"></div>
+    <div id="quicktap-bar-view" class="quicktap-bar-view hidden"></div>
+    <div id="quicktap-pie-view" class="quicktap-pie-view hidden"></div>
+    <div id="quicktap-sparkline-view" class="quicktap-sparkline-view hidden"></div>
+    <div id="quicktap-trafficlight-view" class="quicktap-trafficlight-view hidden"></div>
+    <div class="quicktap-hint" id="quicktap-cycle-hint">Press space to switch chart type</div>
+  </div>
+</div>
+
+<div id="textmarkup-display-screen" class="screen hidden">
+  <div class="quicktap-session-name" id="textmarkup-display-session-name"></div>
+  <div class="textmarkup-display-prompt" id="textmarkup-display-prompt-label"></div>
+  <div id="textmarkup-display-waiting-status" class="hidden-status-lg hidden">Waiting for your tutor to choose a prompt</div>
+  <div id="textmarkup-display-content" class="hidden">
+    <div id="textmarkup-display-hidden-status" class="hidden-status-lg hidden">Collecting responses…</div>
+    <div id="textmarkup-display-total-count" class="textmarkup-display-total-count hidden"></div>
+    <div id="textmarkup-display-heatmap-view" class="textmarkup-display-passage hidden"></div>
+    <div id="textmarkup-display-community-view" class="textmarkup-display-community-view hidden"></div>
+    <div class="quicktap-hint hidden" id="textmarkup-display-cycle-hint">Press space to switch view</div>
+  </div>
+</div>
+
+<script>
+// ======================================================================
+// CONFIG — fill in before deploying. anon/public key only — NEVER the
+// service_role key. Safe to expose in client-side code.
+// ======================================================================
+const SUPABASE_URL = 'https://pnhaxvumpnfwfaiksglx.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_wVqMh7pmnWz63FzQgW_psw_o5sEvEWt';
+// ======================================================================
+
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const CATEGORY_PALETTE = [
+  '#5b8cff', '#ff8a5b', '#48c78e', '#e05bff',
+  '#ffd45b', '#5bd1ff', '#ff5b8a', '#8aff5b'
+];
+
+function colorForCategory(label) {
+  let hash = 0;
+  for (let i = 0; i < label.length; i++) {
+    hash = (hash << 5) - hash + label.charCodeAt(i);
+    hash |= 0;
+  }
+  const idx = Math.abs(hash) % CATEGORY_PALETTE.length;
+  return CATEGORY_PALETTE[idx];
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function showScreen(id) {
+  ['loading-screen', 'invalid-session-screen', 'idle-screen', 'feed-screen', 'quicktap-display-screen', 'textmarkup-display-screen'].forEach(s => {
+    document.getElementById(s).classList.toggle('hidden', s !== id);
+  });
+}
+
+// Tracked per-channel rather than a single shared boolean — a mode can
+// have two independent subscriptions active at once (quick-tap's tally +
+// sessions channels), and one dropping while the other stays healthy must
+// still show the banner, not get masked by the healthy one's SUBSCRIBED
+// event. Unused keys for whichever mode is active just stay true and never
+// affect the check.
+const channelStatus = { quickTap: true, sessions: true, feed: true, textMarkup: true };
+
+function setConnectionStatus(channel, connected) {
+  channelStatus[channel] = connected;
+  const allConnected = Object.values(channelStatus).every(Boolean);
+  document.getElementById('connection-banner').classList.toggle('hidden', allConnected);
+}
+
+function buildStudentUrl(sessionCode) {
+  return `${window.location.origin}${window.location.pathname.replace(/kyomei-display\.html$/, '')}kyomei.html?session=${encodeURIComponent(sessionCode)}`;
+}
+
+// Shared by the idle screen (automatic — nothing to show yet) and the
+// L-triggered overlay (on demand, over whatever else is showing). Same
+// component both times, not two copies of similar markup.
+function renderJoinInfoInto(nameEl, qrEl, urlEl) {
+  nameEl.textContent = currentSession.name;
+  const url = buildStudentUrl(currentSession.session_code);
+  urlEl.textContent = url;
+
+  qrEl.innerHTML = '';
+  if (window.QRCode) {
+    new QRCode(qrEl, {
+      text: url,
+      width: 280,
+      height: 280,
+      correctLevel: QRCode.CorrectLevel.M
+    });
+  }
+}
+
+function renderIdleScreen() {
+  renderJoinInfoInto(
+    document.getElementById('idle-session-name'),
+    document.getElementById('idle-qr'),
+    document.getElementById('idle-url-text')
+  );
+  showScreen('idle-screen');
+}
+
+function showJoinInfoOverlay() {
+  renderJoinInfoInto(
+    document.getElementById('joininfo-session-name'),
+    document.getElementById('joininfo-qr'),
+    document.getElementById('joininfo-url-text')
+  );
+  document.getElementById('join-info-overlay').classList.remove('hidden');
+}
+
+function hideJoinInfoOverlay() {
+  document.getElementById('join-info-overlay').classList.add('hidden');
+}
+
+// ---------------- Bootstrap ----------------
+let currentSession = null;
+let displayMode = null; // 'plain' | 'guided' | 'quicktap' | 'textmarkup'
+
+async function init() {
+  const params = new URLSearchParams(window.location.search);
+  const sessionCode = params.get('session');
+
+  if (!sessionCode) {
+    showScreen('invalid-session-screen');
+    return;
+  }
+
+  const { data: session, error } = await supabaseClient
+    .from('sessions')
+    .select('*')
+    .eq('session_code', sessionCode)
+    .maybeSingle();
+
+  if (error || !session) {
+    showScreen('invalid-session-screen');
+    return;
+  }
+
+  currentSession = session;
+
+  if (session.quick_tap_enabled) {
+    displayMode = 'quicktap';
+    await initQuickTapDisplay(session);
+  } else if (session.text_markup_enabled) {
+    displayMode = 'textmarkup';
+    await initTextMarkupDisplay(session);
+  } else if (session.guided_categories) {
+    displayMode = 'guided';
+    await initGuidedDisplay(session);
+  } else {
+    displayMode = 'plain';
+    await initPlainFeedDisplay(session);
+  }
+
+  // In case the overlay was already toggled on before this page loaded
+  // (or reloaded) — the underlying view above is already showing.
+  if (session.show_join_info) {
+    showJoinInfoOverlay();
+  }
+}
+
+// ---------------- Shared feed (plain + guided) ----------------
+let feedEntries = new Map();
+let activeCategoryId = null; // guided mode only
+let categoriesList = []; // guided mode only, for label lookup
+
+async function fetchCategoryLabel(categoryId) {
+  const { data } = await supabaseClient
+    .from('session_categories')
+    .select('label')
+    .eq('id', categoryId)
+    .single();
+  return data ? data.label : '';
+}
+
+async function loadFeed() {
+  const listEl = document.getElementById('feed-list');
+
+  let query = supabaseClient
+    .from('friction_pool')
+    .select('*, session_categories(label)')
+    .eq('session_id', currentSession.id)
+    .eq('status', 'active');
+
+  if (displayMode === 'guided') {
+    query = query.eq('category_id', activeCategoryId);
+  }
+
+  const { data, error } = await query.order('created_at', { ascending: false });
+
+  feedEntries.clear();
+  feedEntryMeta = [];
+  listEl.innerHTML = '';
+
+  if (error) {
+    console.error('loadFeed failed', error);
+    updateFeedVisibility();
+    return;
+  }
+
+  for (const row of (data || [])) {
+    addFeedEntry(row, row.session_categories ? row.session_categories.label : '', false);
+  }
+  updateFeedVisibility();
+  applyFeedViewMode();
+}
+
+function addFeedEntry(row, categoryLabel, updateVisibility = true) {
+  if (feedEntries.has(row.id)) return;
+  const listEl = document.getElementById('feed-list');
+  const entry = document.createElement('div');
+  entry.className = 'feed-card';
+  const color = colorForCategory(categoryLabel || '');
+  entry.style.borderLeftColor = color;
+  entry.innerHTML = `
+    <div class="feed-card-cat" style="color:${color}">${escapeHtml(categoryLabel || '')}</div>
+    <div class="feed-card-text">${escapeHtml(row.scenario)}</div>
+  `;
+  listEl.prepend(entry);
+  feedEntries.set(row.id, entry);
+  feedEntryMeta.unshift({ id: row.id, categoryId: row.category_id });
+  if (updateVisibility) {
+    updateFeedVisibility();
+    applyFeedViewMode();
+  }
+}
+
+function removeFeedEntry(id) {
+  const el = feedEntries.get(id);
+  if (el) {
+    el.remove();
+    feedEntries.delete(id);
+  }
+  feedEntryMeta = feedEntryMeta.filter(m => m.id !== id);
+  updateFeedVisibility();
+  applyFeedViewMode();
+}
+
+// ---------------- Grouped-by-category feed view (plain sessions) ----------------
+// Driven entirely by sessions.feed_grouped via the existing sessions
+// subscription (see setupSessionsSubscription below) — same pattern as
+// show_join_info / active_category_id. No local keydown listener here;
+// the only way this changes is admin's G key writing to the session row.
+let feedViewMode = 'chronological'; // 'chronological' | 'grouped'
+let feedEntryMeta = []; // mirrors feedEntries' insertion order (newest first), plus category_id for grouping
+let plainFeedCategories = null; // lazy-loaded on first switch to grouped view
+
+async function ensurePlainFeedCategoriesLoaded() {
+  if (plainFeedCategories) return plainFeedCategories;
+  const { data, error } = await supabaseClient
+    .from('session_categories')
+    .select('*')
+    .eq('session_id', currentSession.id)
+    .order('sort_order', { ascending: true });
+  plainFeedCategories = error ? [] : (data || []);
+  return plainFeedCategories;
+}
+
+function renderChronologicalFeedList() {
+  const listEl = document.getElementById('feed-list');
+  listEl.innerHTML = '';
+  for (const meta of feedEntryMeta) {
+    const el = feedEntries.get(meta.id);
+    if (el) listEl.appendChild(el);
+  }
+}
+
+function renderGroupedFeedList() {
+  const listEl = document.getElementById('feed-list');
+  listEl.innerHTML = '';
+
+  const categories = plainFeedCategories || [];
+  const categoriesById = new Map(categories.map(c => [c.id, c]));
+  const categoryOrder = categories.map(c => c.id);
+
+  const groups = new Map();
+  for (const meta of feedEntryMeta) {
+    if (!groups.has(meta.categoryId)) groups.set(meta.categoryId, []);
+    groups.get(meta.categoryId).push(meta);
+  }
+
+  const orderedCategoryIds = [
+    ...categoryOrder.filter(id => groups.has(id)),
+    ...Array.from(groups.keys()).filter(id => !categoryOrder.includes(id))
+  ];
+
+  for (const categoryId of orderedCategoryIds) {
+    const cat = categoriesById.get(categoryId);
+    const heading = document.createElement('div');
+    heading.className = 'feed-group-heading';
+    heading.textContent = cat ? cat.label : '';
+    listEl.appendChild(heading);
+
+    for (const meta of groups.get(categoryId)) {
+      const el = feedEntries.get(meta.id);
+      if (el) listEl.appendChild(el);
+    }
+  }
+}
+
+function applyFeedViewMode() {
+  if (displayMode !== 'plain') return; // grouping only applies to the plain text-response mode
+  if (feedViewMode === 'grouped') {
+    renderGroupedFeedList();
+  } else {
+    renderChronologicalFeedList();
+  }
+}
+
+function updateFeedViewModeIndicator() {
+  const el = document.getElementById('feed-view-mode-indicator');
+  if (el) el.classList.toggle('hidden', feedViewMode !== 'grouped');
+}
+
+async function setFeedGrouped(grouped) {
+  if (displayMode !== 'plain') return;
+  const isCurrentlyGrouped = feedViewMode === 'grouped';
+  if (grouped === isCurrentlyGrouped) return;
+
+  if (grouped) {
+    await ensurePlainFeedCategoriesLoaded();
+    feedViewMode = 'grouped';
+  } else {
+    feedViewMode = 'chronological';
+  }
+  applyFeedViewMode();
+  updateFeedViewModeIndicator();
+}
+
+function updateFeedVisibility() {
+  if (displayMode === 'plain') {
+    if (feedEntries.size === 0) {
+      renderIdleScreen();
+    } else {
+      showScreen('feed-screen');
+      document.getElementById('feed-empty-msg').classList.add('hidden');
+    }
+    return;
+  }
+
+  if (displayMode === 'guided') {
+    if (!activeCategoryId) {
+      renderIdleScreen();
+      return;
+    }
+    showScreen('feed-screen');
+    document.getElementById('feed-empty-msg').classList.toggle('hidden', feedEntries.size > 0);
+  }
+}
+
+let feedChannel = null;
+let feedReconnectTimer = null;
+
+function setupFeedSubscription() {
+  teardownFeedSubscription();
+
+  feedChannel = supabaseClient
+    .channel(`display_feed_${currentSession.id}`)
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'friction_pool',
+      filter: `session_id=eq.${currentSession.id}`
+    }, async (payload) => {
+      if (payload.new.status !== 'active') return;
+      if (displayMode === 'guided' && payload.new.category_id !== activeCategoryId) return;
+      const label = await fetchCategoryLabel(payload.new.category_id);
+      addFeedEntry(payload.new, label);
+    })
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'friction_pool',
+      filter: `session_id=eq.${currentSession.id}`
+    }, async (payload) => {
+      if (payload.new.status === 'active') {
+        if (displayMode === 'guided' && payload.new.category_id !== activeCategoryId) return;
+        if (!feedEntries.has(payload.new.id)) {
+          const label = await fetchCategoryLabel(payload.new.category_id);
+          addFeedEntry(payload.new, label);
+        }
+      } else {
+        removeFeedEntry(payload.new.id);
+      }
+    })
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        setConnectionStatus('feed', true);
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        setConnectionStatus('feed', false);
+        scheduleFeedReconnect();
+      }
+    });
+}
+
+function scheduleFeedReconnect() {
+  if (feedReconnectTimer) return;
+  feedReconnectTimer = setTimeout(() => {
+    feedReconnectTimer = null;
+    if (currentSession) setupFeedSubscription();
+  }, 3000);
+}
+
+function teardownFeedSubscription() {
+  if (feedChannel) {
+    supabaseClient.removeChannel(feedChannel);
+    feedChannel = null;
+  }
+  if (feedReconnectTimer) {
+    clearTimeout(feedReconnectTimer);
+    feedReconnectTimer = null;
+  }
+}
+
+// ---------------- Plain text feed mode ----------------
+async function initPlainFeedDisplay(session) {
+  document.getElementById('feed-session-name').textContent = session.name;
+  document.getElementById('feed-category-label').classList.add('hidden');
+
+  // Pick up whatever grouping state admin already set before this page
+  // loaded (or reloaded) — not just future toggles via the subscription.
+  if (session.feed_grouped) {
+    await ensurePlainFeedCategoriesLoaded();
+    feedViewMode = 'grouped';
+  }
+  updateFeedViewModeIndicator();
+
+  await loadFeed();
+  setupFeedSubscription();
+  // Plain sessions never needed to watch their own row before, but the
+  // join-info overlay toggle applies to every session type.
+  setupSessionsSubscription();
+}
+
+// ---------------- Guided category feed mode ----------------
+function updateGuidedCategoryLabel() {
+  const labelEl = document.getElementById('feed-category-label');
+  const cat = categoriesList.find(c => c.id === activeCategoryId);
+  labelEl.textContent = cat ? cat.label : '';
+  labelEl.classList.remove('hidden');
+}
+
+async function initGuidedDisplay(session) {
+  const { data: categories, error } = await supabaseClient
+    .from('session_categories')
+    .select('*')
+    .eq('session_id', session.id)
+    .order('sort_order', { ascending: true });
+
+  if (error || !categories || categories.length === 0) {
+    showScreen('invalid-session-screen');
+    return;
+  }
+
+  categoriesList = categories;
+  activeCategoryId = session.active_category_id || null;
+
+  document.getElementById('feed-session-name').textContent = session.name;
+
+  if (activeCategoryId) {
+    updateGuidedCategoryLabel();
+    await loadFeed();
+  } else {
+    renderIdleScreen();
+  }
+
+  setupFeedSubscription();
+  setupSessionsSubscription();
+}
+
+// ---------------- Quick-tap tally mode ----------------
+let quickTapOptions = [];
+let quickTapCounts = {};
+let quickTapResponseLog = []; // raw rows {id, option_id, device_id, created_at} — sparkline needs the history, not just counts
+let resultsRevealed = false;
+
+function updateQuickTapVisibility() {
+  document.getElementById('quicktap-hidden-status').classList.toggle('hidden', resultsRevealed);
+  document.getElementById('quicktap-display-grid').classList.toggle('hidden', !resultsRevealed);
+}
+
+function computeMaxCount() {
+  let max = 0;
+  for (const opt of quickTapOptions) {
+    const c = quickTapCounts[opt.id] || 0;
+    if (c > max) max = c;
+  }
+  return max;
+}
+
+// Updates existing bar widths/counts in place (no DOM rebuild) so the CSS
+// width transition actually plays — every bar is renormalized against the
+// current max, not just whichever option just got a new tap.
+function updateAllBars() {
+  const maxCount = computeMaxCount();
+  for (const opt of quickTapOptions) {
+    const count = quickTapCounts[opt.id] || 0;
+    const pct = maxCount > 0 ? (count / maxCount) * 100 : 0;
+    const fillEl = document.getElementById(`qtd-fill-${opt.id}`);
+    const countEl = document.getElementById(`qtd-count-${opt.id}`);
+    if (fillEl) fillEl.style.width = pct + '%';
+    if (countEl) countEl.textContent = count;
+  }
+}
+
+// Simplest, most literal view — the actual buttons students tapped, now
+// showing counts. Built eagerly alongside the bar chart (both are cheap
+// and buttons is the default view), unlike the pie chart below which is
+// built lazily on first cycle to it.
+function buildButtonsView() {
+  const container = document.getElementById('quicktap-buttons-view');
+  container.innerHTML = '';
+  for (const opt of quickTapOptions) {
+    const count = quickTapCounts[opt.id] || 0;
+    const card = document.createElement('div');
+    card.className = 'qtb-card';
+    card.id = `qtb-card-${opt.id}`;
+    card.style.backgroundColor = opt.color || '#5b8cff';
+    card.innerHTML = `
+      <div class="qtb-label">${escapeHtml(opt.label)}</div>
+      <div class="qtb-count" id="qtb-count-${opt.id}">${count}</div>
+    `;
+    container.appendChild(card);
+  }
+}
+
+function updateButtonsCounts() {
+  for (const opt of quickTapOptions) {
+    const countEl = document.getElementById(`qtb-count-${opt.id}`);
+    if (countEl) countEl.textContent = quickTapCounts[opt.id] || 0;
+  }
+}
+
+function renderQuickTapGrid() {
+  const style = currentSession.quick_tap_style || null;
+
+  if (style === 'traffic_light') {
+    const tlView = document.getElementById('quicktap-trafficlight-view');
+    if (tlView.children.length > 0) updateTrafficLightView(); else buildTrafficLightView();
+    return;
+  }
+
+  if (style === 'confidence') {
+    const sparklineView = document.getElementById('quicktap-sparkline-view');
+    if (sparklineView.children.length > 0) updateSparklineView(); else buildSparklineView();
+    return;
+  }
+
+  const buttonsView = document.getElementById('quicktap-buttons-view');
+  if (buttonsView.children.length > 0) {
+    updateButtonsCounts();
+  } else {
+    buildButtonsView();
+  }
+
+  const barView = document.getElementById('quicktap-bar-view');
+
+  // Already built (e.g. a resync while already revealed) — just update
+  // the numbers/widths in place rather than tearing down the DOM.
+  if (barView.children.length > 0) {
+    updateAllBars();
+  } else {
+    barView.innerHTML = '';
+    for (const opt of quickTapOptions) {
+      const count = quickTapCounts[opt.id] || 0;
+      const row = document.createElement('div');
+      row.className = 'bar-row';
+      row.id = `qtd-row-${opt.id}`;
+      row.innerHTML = `
+        <div class="bar-label">${escapeHtml(opt.label)}</div>
+        <div class="bar-track">
+          <div class="bar-fill" id="qtd-fill-${opt.id}" style="background:${opt.color || '#5b8cff'};"></div>
+        </div>
+        <div class="bar-count" id="qtd-count-${opt.id}">${count}</div>
+      `;
+      barView.appendChild(row);
+    }
+
+    // Bars start at width:0 (see CSS) and animate up to their real value on
+    // the next frame — a clean "sweep in" the first time results appear.
+    requestAnimationFrame(() => updateAllBars());
+  }
+
+  // Keep the pie in sync too if it's already been built (tutor cycled to
+  // it earlier), so switching back to it shows current data with no lag.
+  const pieView = document.getElementById('quicktap-pie-view');
+  if (pieView.children.length > 0) {
+    updatePieSegments();
+  }
+}
+
+// ---- Traffic light view (quick_tap_style = 'traffic_light' only) ----
+function computeTrafficLightLeader(options, counts) {
+  let maxCount = -1;
+  let leaders = [];
+  for (const opt of options) {
+    const c = counts[opt.id] || 0;
+    if (c > maxCount) {
+      maxCount = c;
+      leaders = [opt.id];
+    } else if (c === maxCount) {
+      leaders.push(opt.id);
+    }
+  }
+  // No votes yet, or a tie — no single light should read as "the answer".
+  if (maxCount <= 0 || leaders.length !== 1) return null;
+  return leaders[0];
+}
+
+function buildTrafficLightView() {
+  const container = document.getElementById('quicktap-trafficlight-view');
+  container.innerHTML = quickTapOptions.map(opt => `
+    <div class="tl-light-row">
+      <div class="tl-circle" id="tl-circle-${opt.id}" style="background:${opt.color || '#888'}; color:${opt.color || '#888'};"></div>
+      <div class="tl-info">
+        <div class="tl-label">${escapeHtml(opt.label)}</div>
+        <div class="tl-count" id="tl-count-${opt.id}">0</div>
+      </div>
+    </div>
+  `).join('') + `<div class="tl-total" id="tl-total">0 total</div>`;
+  updateTrafficLightView();
+}
+
+function updateTrafficLightView() {
+  const leaderId = computeTrafficLightLeader(quickTapOptions, quickTapCounts);
+  let total = 0;
+  for (const opt of quickTapOptions) {
+    const count = quickTapCounts[opt.id] || 0;
+    total += count;
+    const circle = document.getElementById(`tl-circle-${opt.id}`);
+    const countEl = document.getElementById(`tl-count-${opt.id}`);
+    if (circle) circle.classList.toggle('tl-lit', opt.id === leaderId);
+    if (countEl) countEl.textContent = count;
+  }
+  const totalEl = document.getElementById('tl-total');
+  if (totalEl) totalEl.textContent = `${total} total`;
+}
+
+// ---------------- Chart type cycle (spacebar) ----------------
+const PIE_RADIUS = 70;
+let CHART_TYPES = ['buttons', 'bar', 'pie'];
+let chartType = CHART_TYPES[0];
+
+function applyChartTypeVisibility() {
+  document.getElementById('quicktap-buttons-view').classList.toggle('hidden', chartType !== 'buttons');
+  document.getElementById('quicktap-bar-view').classList.toggle('hidden', chartType !== 'bar');
+  document.getElementById('quicktap-pie-view').classList.toggle('hidden', chartType !== 'pie');
+  document.getElementById('quicktap-sparkline-view').classList.toggle('hidden', chartType !== 'sparkline');
+  document.getElementById('quicktap-trafficlight-view').classList.toggle('hidden', chartType !== 'trafficlight');
+  // Pulse-check sessions (traffic light / confidence) have exactly one
+  // view — the "press space to cycle" hint only makes sense when there's
+  // something to cycle to.
+  const hintEl = document.getElementById('quicktap-cycle-hint');
+  if (hintEl) hintEl.classList.toggle('hidden', CHART_TYPES.length <= 1);
+}
+
+function cycleChartType() {
+  if (displayMode !== 'quicktap' || !resultsRevealed) return;
+  if (CHART_TYPES.length <= 1) return; // nothing to cycle to — spacebar is a silent no-op
+  const idx = CHART_TYPES.indexOf(chartType);
+  chartType = CHART_TYPES[(idx + 1) % CHART_TYPES.length];
+  applyChartTypeVisibility();
+
+  if (chartType === 'pie') {
+    const pieView = document.getElementById('quicktap-pie-view');
+    if (pieView.children.length === 0) {
+      buildPieChart();
+    } else {
+      updatePieSegments();
+    }
+  }
+  // buttons and bar are already eagerly built/kept in sync by
+  // renderQuickTapGrid() and incrementQuickTapCount(), so no build-on-cycle
+  // step needed for them.
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === ' ' || e.key === 'Spacebar') {
+    e.preventDefault(); // stop the page from scrolling on spacebar
+    if (displayMode === 'textmarkup') {
+      cycleTextMarkupChartType();
+    } else {
+      cycleChartType();
+    }
+  }
+});
+
+function buildPieChart() {
+  const container = document.getElementById('quicktap-pie-view');
+  const circumference = 2 * Math.PI * PIE_RADIUS;
+
+  const circles = quickTapOptions.map(opt => `
+    <circle
+      id="pie-seg-${opt.id}"
+      class="pie-segment"
+      cx="100" cy="100" r="${PIE_RADIUS}"
+      fill="none"
+      stroke="${opt.color || '#5b8cff'}"
+      stroke-width="40"
+      stroke-dasharray="0 ${circumference}"
+      stroke-dashoffset="0"
+      transform="rotate(-90 100 100)"
+    ></circle>
+  `).join('');
+
+  const legendItems = quickTapOptions.map(opt => `
+    <div class="pie-legend-row">
+      <span class="pie-legend-dot" style="background:${opt.color || '#5b8cff'}"></span>
+      <span class="pie-legend-label">${escapeHtml(opt.label)}</span>
+      <span class="pie-legend-count" id="pie-count-${opt.id}">${quickTapCounts[opt.id] || 0}</span>
+    </div>
+  `).join('');
+
+  container.innerHTML = `
+    <svg viewBox="0 0 200 200" class="pie-svg">
+      <circle cx="100" cy="100" r="${PIE_RADIUS}" fill="none" stroke="var(--panel-2)" stroke-width="40"></circle>
+      ${circles}
+      <text x="100" y="96" text-anchor="middle" class="pie-total-num" id="pie-total-num">0</text>
+      <text x="100" y="120" text-anchor="middle" class="pie-total-label">votes</text>
+    </svg>
+    <div class="pie-legend">${legendItems}</div>
+  `;
+
+  // Segments start collapsed (see dasharray above) and animate open on the
+  // next frame — same "sweep in" treatment as the bar chart.
+  requestAnimationFrame(() => updatePieSegments());
+}
+
+function updatePieSegments() {
+  const circumference = 2 * Math.PI * PIE_RADIUS;
+  const total = quickTapOptions.reduce((sum, opt) => sum + (quickTapCounts[opt.id] || 0), 0);
+
+  let offsetAccum = 0;
+  for (const opt of quickTapOptions) {
+    const count = quickTapCounts[opt.id] || 0;
+    const fraction = total > 0 ? count / total : 0;
+    const dash = fraction * circumference;
+    const gap = circumference - dash;
+
+    const circle = document.getElementById(`pie-seg-${opt.id}`);
+    if (circle) {
+      circle.setAttribute('stroke-dasharray', `${dash} ${gap}`);
+      circle.setAttribute('stroke-dashoffset', String(-offsetAccum));
+    }
+    offsetAccum += dash;
+
+    const countEl = document.getElementById(`pie-count-${opt.id}`);
+    if (countEl) countEl.textContent = count;
+  }
+
+  const totalEl = document.getElementById('pie-total-num');
+  if (totalEl) totalEl.textContent = total;
+}
+
+// ---- Sparkline (numeric-scale sessions only) ----
+// Last-observation-carried-forward per device_id, not raw tap volume — a
+// student retapping repeatedly shouldn't dominate the line over one who
+// tapped once. See build prompt for the full rationale.
+function computeSparklineSeries(responses, valueByOptionId, numBuckets) {
+  if (!responses.length) return [];
+  const sorted = [...responses].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  const startTime = new Date(sorted[0].created_at).getTime();
+  const endTime = new Date(sorted[sorted.length - 1].created_at).getTime();
+
+  const points = [];
+  for (let i = 0; i < numBuckets; i++) {
+    const t = numBuckets === 1 ? startTime : startTime + (i / (numBuckets - 1)) * (endTime - startTime);
+    const latestByDevice = new Map();
+    for (const r of sorted) {
+      if (new Date(r.created_at).getTime() > t) break;
+      const key = r.device_id || `__row_${r.id}`;
+      latestByDevice.set(key, valueByOptionId[r.option_id]);
+    }
+    const values = Array.from(latestByDevice.values()).filter(v => typeof v === 'number' && !isNaN(v));
+    points.push(values.length ? values.reduce((a, b) => a + b, 0) / values.length : null);
+  }
+  return points;
+}
+
+function buildSparklineView() {
+  const container = document.getElementById('quicktap-sparkline-view');
+  container.innerHTML = `
+    <div class="sparkline-summary">Live average: <strong id="sparkline-current-value">–</strong></div>
+    <svg viewBox="0 0 560 160" class="sparkline-svg" preserveAspectRatio="none">
+      <text x="4" y="12" class="sparkline-axis-label" id="sparkline-max-label"></text>
+      <text x="4" y="156" class="sparkline-axis-label" id="sparkline-min-label"></text>
+      <polyline id="sparkline-path" class="sparkline-line" points=""></polyline>
+    </svg>
+  `;
+  updateSparklineView();
+}
+
+function updateSparklineView() {
+  const valueByOptionId = {};
+  let minVal = Infinity, maxVal = -Infinity;
+  for (const opt of quickTapOptions) {
+    const v = parseInt(opt.label, 10);
+    if (!isNaN(v)) {
+      valueByOptionId[opt.id] = v;
+      if (v < minVal) minVal = v;
+      if (v > maxVal) maxVal = v;
+    }
+  }
+  if (!isFinite(minVal) || !isFinite(maxVal)) { minVal = 0; maxVal = 1; }
+  if (minVal === maxVal) maxVal = minVal + 1;
+
+  const numBuckets = 24;
+  const series = computeSparklineSeries(quickTapResponseLog, valueByOptionId, numBuckets);
+
+  const width = 560, height = 160, padTop = 16, padBottom = 16;
+  const usableHeight = height - padTop - padBottom;
+
+  const pts = [];
+  series.forEach((val, i) => {
+    if (val === null) return;
+    const x = numBuckets === 1 ? 0 : (i / (numBuckets - 1)) * width;
+    const y = padTop + (1 - (val - minVal) / (maxVal - minVal)) * usableHeight;
+    pts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+  });
+
+  const pathEl = document.getElementById('sparkline-path');
+  if (pathEl) pathEl.setAttribute('points', pts.join(' '));
+
+  const maxLabelEl = document.getElementById('sparkline-max-label');
+  const minLabelEl = document.getElementById('sparkline-min-label');
+  if (maxLabelEl) maxLabelEl.textContent = maxVal;
+  if (minLabelEl) minLabelEl.textContent = minVal;
+
+  const lastVal = [...series].reverse().find(v => v !== null);
+  const currentEl = document.getElementById('sparkline-current-value');
+  if (currentEl) currentEl.textContent = lastVal !== undefined ? lastVal.toFixed(1) : '–';
+}
+
+function incrementQuickTapCount(row) {
+  quickTapResponseLog.push(row);
+  quickTapCounts[row.option_id] = (quickTapCounts[row.option_id] || 0) + 1;
+
+  const style = currentSession.quick_tap_style || null;
+
+  if (style === 'traffic_light') {
+    updateTrafficLightView();
+    return;
+  }
+  if (style === 'confidence') {
+    updateSparklineView();
+    return;
+  }
+
+  updateButtonsCounts();
+  // Every bar's width is relative to the current leader, so a single tap
+  // can shift all of them, not just the one that was tapped.
+  updateAllBars();
+
+  const pieView = document.getElementById('quicktap-pie-view');
+  if (pieView.children.length > 0) {
+    updatePieSegments();
+  }
+}
+
+async function loadQuickTapCounts() {
+  const { data, error } = await supabaseClient
+    .from('quick_tap_responses')
+    .select('id, option_id, device_id, created_at')
+    .eq('session_id', currentSession.id)
+    .order('created_at', { ascending: true });
+
+  quickTapResponseLog = error ? [] : (data || []);
+  quickTapCounts = {};
+  for (const r of quickTapResponseLog) {
+    quickTapCounts[r.option_id] = (quickTapCounts[r.option_id] || 0) + 1;
+  }
+  renderQuickTapGrid();
+}
+
+async function initQuickTapDisplay(session) {
+  const { data: options, error } = await supabaseClient
+    .from('quick_tap_options')
+    .select('*')
+    .eq('session_id', session.id)
+    .order('sort_order', { ascending: true });
+
+  if (error || !options || options.length === 0) {
+    showScreen('invalid-session-screen');
+    return;
+  }
+
+  quickTapOptions = options;
+
+  const style = session.quick_tap_style || null;
+  if (style === 'traffic_light') {
+    CHART_TYPES = ['trafficlight'];
+    chartType = 'trafficlight';
+  } else if (style === 'confidence') {
+    CHART_TYPES = ['sparkline'];
+    chartType = 'sparkline';
+  } else {
+    CHART_TYPES = ['buttons', 'bar', 'pie'];
+    chartType = 'buttons';
+  }
+  // The HTML's default hidden/visible classes only match chartType=
+  // 'buttons' — without this, a traffic-light/confidence session builds
+  // its view correctly but it stays behind class="hidden" while the
+  // empty, never-built buttons view sits there visible instead.
+  applyChartTypeVisibility();
+
+  resultsRevealed = !!session.results_revealed;
+
+  document.getElementById('quicktap-display-session-name').textContent = session.name;
+
+  const headingEl = document.getElementById('quicktap-heading-display');
+  if (session.quick_tap_heading) {
+    headingEl.textContent = session.quick_tap_heading;
+    headingEl.classList.remove('hidden');
+  } else {
+    headingEl.classList.add('hidden');
+  }
+
+  showScreen('quicktap-display-screen');
+  updateQuickTapVisibility();
+
+  if (resultsRevealed) {
+    await loadQuickTapCounts();
+  }
+
+  setupQuickTapResponsesSubscription();
+  setupSessionsSubscription();
+}
+
+let quickTapChannel = null;
+let quickTapReconnectTimer = null;
+
+function setupQuickTapResponsesSubscription() {
+  teardownQuickTapResponsesSubscription();
+
+  quickTapChannel = supabaseClient
+    .channel(`display_qt_responses_${currentSession.id}`)
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'quick_tap_responses',
+      filter: `session_id=eq.${currentSession.id}`
+    }, (payload) => {
+      if (!resultsRevealed) return;
+      incrementQuickTapCount(payload.new);
+    })
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        setConnectionStatus('quickTap', true);
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        setConnectionStatus('quickTap', false);
+        scheduleQuickTapReconnect();
+      }
+    });
+}
+
+function scheduleQuickTapReconnect() {
+  if (quickTapReconnectTimer) return;
+  quickTapReconnectTimer = setTimeout(() => {
+    quickTapReconnectTimer = null;
+    if (currentSession) setupQuickTapResponsesSubscription();
+  }, 3000);
+}
+
+function teardownQuickTapResponsesSubscription() {
+  if (quickTapChannel) {
+    supabaseClient.removeChannel(quickTapChannel);
+    quickTapChannel = null;
+  }
+  if (quickTapReconnectTimer) {
+    clearTimeout(quickTapReconnectTimer);
+    quickTapReconnectTimer = null;
+  }
+}
+
+// ---------------- Text markup display mode ----------------
+let textMarkupPromptsList = [];
+let textMarkupActivePromptId = null;
+let textMarkupResponses = []; // raw {spans} rows for the active prompt
+let textMarkupWords = []; // flat, index-aligned with span {start,end} word indices
+let textMarkupParagraphs = []; // arrays of word indices, one array per paragraph
+let textMarkupChartType = 'heatmap';
+const TEXTMARKUP_CHART_TYPES = ['heatmap', 'community'];
+
+// Mirrors kyomei.html's buildPassageMarkup tokenization exactly — spans
+// captured by students are word-index pairs against this same splitting,
+// so the aggregate must tokenize identically or indices won't line up.
+function tokenizeTextMarkupPassage(passageText) {
+  const lines = (passageText || '').split('\n').map(p => p.trim()).filter(Boolean);
+  const words = [];
+  const paragraphs = [];
+  for (const line of lines) {
+    const indices = [];
+    for (const w of line.split(/\s+/).filter(Boolean)) {
+      indices.push(words.length);
+      words.push(w);
+    }
+    paragraphs.push(indices);
+  }
+  return { words, paragraphs };
+}
+
+function computeTextMarkupWordCounts(responses, totalWords) {
+  const counts = new Array(totalWords).fill(0);
+  for (const r of responses) {
+    for (const span of (r.spans || [])) {
+      const start = Math.max(0, span.start);
+      const end = Math.min(span.end, totalWords - 1);
+      for (let i = start; i <= end; i++) counts[i]++;
+    }
+  }
+  return counts;
+}
+
+// Merges overlapping/adjacent highlighted words into contiguous runs —
+// the same consolidation Kindle's "popular highlights" does, rather than
+// listing every near-duplicate student selection separately.
+function computeTextMarkupCommunityRuns(counts) {
+  const runs = [];
+  let i = 0;
+  while (i < counts.length) {
+    if (counts[i] > 0) {
+      const start = i;
+      let peak = counts[i];
+      while (i < counts.length && counts[i] > 0) {
+        if (counts[i] > peak) peak = counts[i];
+        i++;
+      }
+      runs.push({ start, end: i - 1, peak });
+    } else {
+      i++;
+    }
+  }
+  runs.sort((a, b) => b.peak - a.peak);
+  return runs;
+}
+
+// Hue interpolation, not alpha — the eye distinguishes hue changes far
+// better than fine opacity gradations, so mid-range counts stay legible
+// against the low and high ends instead of blurring together.
+// Zero-count words never reach this function (renderTextMarkupHeatmap
+// gates on ratio > 0), so the ratio:0 stop is really "lowest non-zero
+// count" — blue, the cold end of a cold-to-hot ramp through to red.
+const HEATMAP_STOPS = [
+  { ratio: 0,    color: [64, 145, 255] },  // blue — cold, lightly highlighted
+  { ratio: 0.33, color: [255, 231, 145] }, // pale yellow
+  { ratio: 0.66, color: [255, 149, 62] },  // orange
+  { ratio: 1,    color: [214, 40, 40] }    // red — hot, peak intensity
+];
+
+function heatmapColorForRatio(ratio) {
+  for (let i = 0; i < HEATMAP_STOPS.length - 1; i++) {
+    const a = HEATMAP_STOPS[i];
+    const b = HEATMAP_STOPS[i + 1];
+    if (ratio >= a.ratio && ratio <= b.ratio) {
+      const t = (ratio - a.ratio) / (b.ratio - a.ratio);
+      const rgb = a.color.map((c, idx) => Math.round(c + (b.color[idx] - c) * t));
+      return `rgb(${rgb.join(',')})`;
+    }
+  }
+  return `rgb(${HEATMAP_STOPS[HEATMAP_STOPS.length - 1].color.join(',')})`;
+}
+
+function renderTextMarkupHeatmap(counts) {
+  const container = document.getElementById('textmarkup-display-heatmap-view');
+  const peak = counts.length ? Math.max(0, ...counts) : 0;
+  container.innerHTML = textMarkupParagraphs.map(indices => {
+    const spans = indices.map(i => {
+      const c = counts[i] || 0;
+      const ratio = peak > 0 ? c / peak : 0;
+      const style = ratio > 0
+        ? ` style="background:${heatmapColorForRatio(ratio)};color:#1a1a1a;border-radius:3px;"`
+        : '';
+      return `<span${style}>${escapeHtml(textMarkupWords[i])}</span>`;
+    });
+    return `<p>${spans.join(' ')}</p>`;
+  }).join('');
+}
+
+function renderTextMarkupCommunity(counts) {
+  const container = document.getElementById('textmarkup-display-community-view');
+  const runs = computeTextMarkupCommunityRuns(counts);
+  if (runs.length === 0) {
+    container.innerHTML = '<div class="hidden-status-lg">No highlights yet.</div>';
+    return;
+  }
+  container.innerHTML = runs.map(run => {
+    const phrase = textMarkupWords.slice(run.start, run.end + 1).join(' ');
+    return `<div class="tm-community-row-lg"><span class="tm-community-count-lg">${run.peak}</span><span class="tm-community-phrase-lg">${escapeHtml(phrase)}</span></div>`;
+  }).join('');
+}
+
+function updateTextMarkupTotalCount() {
+  const el = document.getElementById('textmarkup-display-total-count');
+  const n = textMarkupResponses.length;
+  el.textContent = `${n} response${n === 1 ? '' : 's'}`;
+}
+
+function applyTextMarkupChartTypeVisibility() {
+  document.getElementById('textmarkup-display-heatmap-view').classList.toggle('hidden', textMarkupChartType !== 'heatmap');
+  document.getElementById('textmarkup-display-community-view').classList.toggle('hidden', textMarkupChartType !== 'community');
+}
+
+function cycleTextMarkupChartType() {
+  if (displayMode !== 'textmarkup' || !resultsRevealed) return;
+  const idx = TEXTMARKUP_CHART_TYPES.indexOf(textMarkupChartType);
+  textMarkupChartType = TEXTMARKUP_CHART_TYPES[(idx + 1) % TEXTMARKUP_CHART_TYPES.length];
+  applyTextMarkupChartTypeVisibility();
+}
+
+async function initTextMarkupDisplay(session) {
+  const { data: prompts, error } = await supabaseClient
+    .from('text_markup_prompts')
+    .select('*')
+    .eq('session_id', session.id)
+    .order('sort_order', { ascending: true });
+
+  if (error || !prompts || prompts.length === 0) {
+    showScreen('invalid-session-screen');
+    return;
+  }
+
+  textMarkupPromptsList = prompts;
+  textMarkupActivePromptId = session.active_prompt_id || null;
+  resultsRevealed = !!session.results_revealed;
+
+  const tokenized = tokenizeTextMarkupPassage(session.passage_text);
+  textMarkupWords = tokenized.words;
+  textMarkupParagraphs = tokenized.paragraphs;
+
+  textMarkupChartType = 'heatmap';
+  applyTextMarkupChartTypeVisibility();
+
+  document.getElementById('textmarkup-display-session-name').textContent = session.name;
+
+  showScreen('textmarkup-display-screen');
+  await renderTextMarkupDisplayState();
+
+  setupTextMarkupResponsesSubscription();
+  setupSessionsSubscription();
+}
+
+async function renderTextMarkupDisplayState() {
+  const waitingEl = document.getElementById('textmarkup-display-waiting-status');
+  const contentEl = document.getElementById('textmarkup-display-content');
+  const labelEl = document.getElementById('textmarkup-display-prompt-label');
+  const hiddenStatusEl = document.getElementById('textmarkup-display-hidden-status');
+  const totalCountEl = document.getElementById('textmarkup-display-total-count');
+  const hintEl = document.getElementById('textmarkup-display-cycle-hint');
+
+  if (!textMarkupActivePromptId) {
+    waitingEl.classList.remove('hidden');
+    contentEl.classList.add('hidden');
+    labelEl.textContent = '';
+    return;
+  }
+
+  waitingEl.classList.add('hidden');
+  contentEl.classList.remove('hidden');
+
+  const prompt = textMarkupPromptsList.find(p => p.id === textMarkupActivePromptId);
+  labelEl.textContent = prompt ? prompt.prompt_text : '';
+
+  hiddenStatusEl.classList.toggle('hidden', resultsRevealed);
+  totalCountEl.classList.toggle('hidden', !resultsRevealed);
+  hintEl.classList.toggle('hidden', !resultsRevealed);
+  applyTextMarkupChartTypeVisibility();
+
+  if (resultsRevealed) {
+    await loadTextMarkupAggregate();
+  }
+}
+
+async function loadTextMarkupAggregate() {
+  const { data, error } = await supabaseClient
+    .from('text_markup_responses')
+    .select('spans')
+    .eq('session_id', currentSession.id)
+    .eq('prompt_id', textMarkupActivePromptId);
+
+  textMarkupResponses = error ? [] : (data || []);
+  updateTextMarkupTotalCount();
+
+  const counts = computeTextMarkupWordCounts(textMarkupResponses, textMarkupWords.length);
+  renderTextMarkupHeatmap(counts);
+  renderTextMarkupCommunity(counts);
+}
+
+let textMarkupResponsesChannel = null;
+let textMarkupResponsesReconnectTimer = null;
+
+function setupTextMarkupResponsesSubscription() {
+  teardownTextMarkupResponsesSubscription();
+
+  textMarkupResponsesChannel = supabaseClient
+    .channel(`display_tm_responses_${currentSession.id}`)
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'text_markup_responses',
+      filter: `session_id=eq.${currentSession.id}`
+    }, (payload) => {
+      if (!resultsRevealed) return;
+      if (payload.new.prompt_id !== textMarkupActivePromptId) return;
+      loadTextMarkupAggregate();
+    })
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'text_markup_responses',
+      filter: `session_id=eq.${currentSession.id}`
+    }, (payload) => {
+      // Resubmission (upsert) — refetch-and-recompute is cheap at
+      // classroom scale, simpler than patching the changed row's spans in.
+      if (!resultsRevealed) return;
+      if (payload.new.prompt_id !== textMarkupActivePromptId) return;
+      loadTextMarkupAggregate();
+    })
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        setConnectionStatus('textMarkup', true);
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        setConnectionStatus('textMarkup', false);
+        scheduleTextMarkupResponsesReconnect();
+      }
+    });
+}
+
+function scheduleTextMarkupResponsesReconnect() {
+  if (textMarkupResponsesReconnectTimer) return;
+  textMarkupResponsesReconnectTimer = setTimeout(() => {
+    textMarkupResponsesReconnectTimer = null;
+    if (currentSession) setupTextMarkupResponsesSubscription();
+  }, 3000);
+}
+
+function teardownTextMarkupResponsesSubscription() {
+  if (textMarkupResponsesChannel) {
+    supabaseClient.removeChannel(textMarkupResponsesChannel);
+    textMarkupResponsesChannel = null;
+  }
+  if (textMarkupResponsesReconnectTimer) {
+    clearTimeout(textMarkupResponsesReconnectTimer);
+    textMarkupResponsesReconnectTimer = null;
+  }
+}
+
+// ---------------- Sessions subscription (guided category switches + reveal flips) ----------------
+let sessionsChannel = null;
+let sessionsReconnectTimer = null;
+
+function setupSessionsSubscription() {
+  teardownSessionsSubscription();
+
+  sessionsChannel = supabaseClient
+    .channel(`display_session_${currentSession.id}`)
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'sessions',
+      filter: `id=eq.${currentSession.id}`
+    }, async (payload) => {
+      // Applies regardless of displayMode — a session's join-info overlay
+      // can be summoned during a feed, a tally, a guided category, any of
+      // it — shown/hidden on top without disturbing what's underneath.
+      const newShowJoinInfo = !!payload.new.show_join_info;
+      if (newShowJoinInfo !== !!currentSession.show_join_info) {
+        currentSession.show_join_info = newShowJoinInfo;
+        if (newShowJoinInfo) {
+          showJoinInfoOverlay();
+        } else {
+          hideJoinInfoOverlay();
+        }
+      }
+
+      // Only meaningful for displayMode === 'plain' (setFeedGrouped no-ops
+      // otherwise) — admin's G key is the only thing that ever changes this.
+      const newFeedGrouped = !!payload.new.feed_grouped;
+      if (newFeedGrouped !== !!currentSession.feed_grouped) {
+        currentSession.feed_grouped = newFeedGrouped;
+        await setFeedGrouped(newFeedGrouped);
+      }
+
+      if (displayMode === 'guided') {
+        const newActive = payload.new.active_category_id || null;
+        if (newActive !== activeCategoryId) {
+          activeCategoryId = newActive;
+          currentSession.active_category_id = newActive;
+          if (activeCategoryId) {
+            updateGuidedCategoryLabel();
+            await loadFeed();
+          } else {
+            renderIdleScreen();
+          }
+        }
+      } else if (displayMode === 'quicktap') {
+        const newRevealed = !!payload.new.results_revealed;
+        if (newRevealed !== resultsRevealed) {
+          resultsRevealed = newRevealed;
+          currentSession.results_revealed = newRevealed;
+          updateQuickTapVisibility();
+          if (resultsRevealed) {
+            await loadQuickTapCounts();
+          }
+        }
+      } else if (displayMode === 'textmarkup') {
+        const newPromptId = payload.new.active_prompt_id || null;
+        const newRevealed = !!payload.new.results_revealed;
+        const promptChanged = newPromptId !== textMarkupActivePromptId;
+        const revealChanged = newRevealed !== resultsRevealed;
+
+        if (promptChanged) {
+          textMarkupActivePromptId = newPromptId;
+          currentSession.active_prompt_id = newPromptId;
+        }
+        if (revealChanged) {
+          resultsRevealed = newRevealed;
+          currentSession.results_revealed = newRevealed;
+          if (newRevealed) {
+            // Always land on the fuller picture first when results are newly revealed.
+            textMarkupChartType = 'heatmap';
+          }
+        }
+        if (promptChanged || revealChanged) {
+          await renderTextMarkupDisplayState();
+        }
+      }
+    })
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        setConnectionStatus('sessions', true);
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        setConnectionStatus('sessions', false);
+        scheduleSessionsReconnect();
+      }
+    });
+}
+
+function scheduleSessionsReconnect() {
+  if (sessionsReconnectTimer) return;
+  sessionsReconnectTimer = setTimeout(() => {
+    sessionsReconnectTimer = null;
+    if (currentSession) setupSessionsSubscription();
+  }, 3000);
+}
+
+function teardownSessionsSubscription() {
+  if (sessionsChannel) {
+    supabaseClient.removeChannel(sessionsChannel);
+    sessionsChannel = null;
+  }
+  if (sessionsReconnectTimer) {
+    clearTimeout(sessionsReconnectTimer);
+    sessionsReconnectTimer = null;
+  }
+}
+
+init();
+</script>
+</body>
+</html>
