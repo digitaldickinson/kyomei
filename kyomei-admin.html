@@ -716,6 +716,7 @@ function showListScreen() {
   teardownFeedSubscription();
   teardownTallySubscription();
   teardownTextMarkupSubscription();
+  document.getElementById('connection-banner').classList.add('hidden');
   guidedCategories = [];
   activeCategoryId = null;
   textMarkupPrompts = [];
@@ -1823,7 +1824,6 @@ function teardownTextMarkupSubscription() {
     clearTimeout(textMarkupReconnectTimer);
     textMarkupReconnectTimer = null;
   }
-  document.getElementById('connection-banner').classList.add('hidden');
 }
 
 async function enterSession(session) {
@@ -2461,7 +2461,6 @@ function teardownFeedSubscription() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
-  document.getElementById('connection-banner').classList.add('hidden');
 }
 
 // ---------------- Quick-tap results (buttons / bar / pie / sparkline / traffic light) ----------------
@@ -2936,7 +2935,6 @@ function teardownTallySubscription() {
     clearTimeout(tallyReconnectTimer);
     tallyReconnectTimer = null;
   }
-  document.getElementById('connection-banner').classList.add('hidden');
 }
 
 function handleQueryError(error) {
