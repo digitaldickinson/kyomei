@@ -570,6 +570,7 @@
       <div class="top-row">
         <button class="ghost" id="back-to-list-from-session-btn">&larr; All sessions</button>
         <div class="session-row-actions">
+          <button class="ghost" type="button" id="open-display-btn">Open display ↗</button>
           <button class="ghost" type="button" id="refresh-session-btn">⟳ Refresh</button>
           <button class="warning" type="button" id="reset-session-btn">Reset responses</button>
           <button class="danger" type="button" id="delete-session-btn">Delete permanently</button>
@@ -1937,6 +1938,13 @@ function updateModeBadge() {
     badge.textContent = 'Text response';
   }
 }
+
+document.getElementById('open-display-btn').addEventListener('click', () => {
+  if (!currentSession) return;
+  const url = new URL('kyomei-display.html', window.location.href);
+  url.searchParams.set('session', currentSession.session_code);
+  window.open(url.toString(), '_blank');
+});
 
 document.getElementById('refresh-session-btn').addEventListener('click', async () => {
   if (!currentSession) return;
