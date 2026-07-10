@@ -768,7 +768,11 @@ document.getElementById('send-link-btn').addEventListener('click', async () => {
 supabaseClient.auth.onAuthStateChange((event, session) => {
   if (session) {
     showAuthed();
-    showListScreen();
+    if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+      showListScreen();
+    }
+    // TOKEN_REFRESHED and other events: session is still valid, but don't
+    // disturb whatever view is currently open.
   } else {
     showLogin();
   }
