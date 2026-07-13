@@ -34,6 +34,14 @@ Every session is exactly one of these, set at creation:
   retapping freely. A reveal-gated timeline reconstructs how the room's
   vote evolved across the clip, bucketed at a tutor-adjustable interval.
 
+## JS libraries
+
+Loaded via CDN `<script>` tags, no build step or package manager:
+
+- **[`@supabase/supabase-js`](https://github.com/supabase/supabase-js) v2** — all three pages. Database reads/writes and Realtime channel subscriptions.
+- **[`qrcodejs`](https://github.com/davidshimjs/qrcodejs) v1.0.0** — `kyomei-display.html` only. Renders the join QR code.
+- **Kaltura Player (PlayKit JS)** — `kyomei-display.html` only, loaded dynamically at runtime (not a static `<script>` tag) the first time a Media Vote session's video source is `mmutube`. Uses the Dynamic Embed pattern (`KalturaPlayer.setup()`), not the non-programmable iframe embed.
+
 ## Backend
 
 Data is stored in [Supabase](https://supabase.com) (via `@supabase/supabase-js`),
