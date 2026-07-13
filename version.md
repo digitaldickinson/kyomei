@@ -8,11 +8,19 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. `friction_pool_schema.sql` is not tracked in git, so any entry that changed the schema is flagged (**schema**) as a reminder to re-run it against Supabase.
 
-**Current version: 1.5.2**
+**Current version: 1.7.0**
 
 ---
 
 ## Log
+
+### 1.7.0 — 2026-07-13 — **schema**
+Text Markup: two independent aggregate-view improvements. (1) Non-linear (square-root) heatmap intensity scaling, applied identically in admin and display, so a single runaway-popular phrase no longer flattens every other word's relative intensity — secondary structure among more modest highlights stays visible. (2) Cross-prompt comparison view — a broadcast "Compare with…" control in admin (reveal-gated, like every other aggregate view) shows two prompts' heatmaps side by side on the display, reusing the exact same heatmap render function called twice rather than a second implementation. Scoped to heatmap only — community-highlight's ranked list is unaffected, still sorted by raw peak count.
+
+### 1.6.0 — 2026-07-13 — **schema**
+Text Markup: language and poetry support. Replaced whitespace-split tokenization with locale-aware `Intl.Segmenter` across all three files — the tokenizer function itself is byte-identical in all three, verified via diff, so word index `N` still refers to the same word everywhere. Fixes three real gaps: stanza/blank-line breaks were silently collapsed, whitespace-delimited splitting completely failed for languages with no spaces between words (Chinese, Japanese, Thai, Lao, Khmer, Myanmar), and there was no right-to-left support. New `passage_locale` field (admin form: dropdown of common presets + free-text override) drives both segmentation and automatic `dir="rtl"`/`"ltr"`.
+
+**Known caveat, found while testing against the project's own English passage:** `Intl.Segmenter` tokenizes English differently than the old whitespace split — punctuation and hyphenated compounds (e.g. "mid-air", "plane.") now split into separate segments, changing the word count. Any pre-existing text-markup session that already has submitted student highlights should be **reset** after this deploys, or its heatmap will misalign against the old word indices. Brand-new sessions are unaffected.
 
 ### 1.5.2 — 2026-07-13
 README: added a "JS libraries" section (`@supabase/supabase-js`, `qrcodejs`, Kaltura Player).

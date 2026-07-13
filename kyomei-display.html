@@ -356,6 +356,7 @@
     text-align: left;
     max-height: 60vh;
     overflow-y: auto;
+    white-space: pre-wrap;
   }
   .textmarkup-display-passage p { margin: 0 0 16px; }
   .textmarkup-display-passage p:last-child { margin-bottom: 0; }
@@ -371,6 +372,14 @@
     gap: 14px;
     max-height: 60vh;
     overflow-y: auto;
+  }
+  .textmarkup-display-compare-view { display: flex; flex-wrap: wrap; gap: 24px; width: 100%; }
+  .textmarkup-compare-column { flex: 1 1 420px; min-width: 0; }
+  .textmarkup-compare-label {
+    font-size: clamp(1rem, 1.5vw, 1.3rem);
+    font-weight: 700;
+    color: var(--muted);
+    margin-bottom: 8px;
   }
   .tm-community-row-lg {
     display: flex;
@@ -573,6 +582,16 @@
     <div id="textmarkup-display-hidden-status" class="hidden-status-lg hidden">Collecting responses…</div>
     <div id="textmarkup-display-total-count" class="textmarkup-display-total-count hidden"></div>
     <div id="textmarkup-display-heatmap-view" class="textmarkup-display-passage hidden"></div>
+    <div id="textmarkup-display-compare-view" class="textmarkup-display-compare-view hidden">
+      <div class="textmarkup-compare-column">
+        <div class="textmarkup-compare-label" id="textmarkup-compare-label-a"></div>
+        <div id="textmarkup-display-heatmap-view-a" class="textmarkup-display-passage"></div>
+      </div>
+      <div class="textmarkup-compare-column">
+        <div class="textmarkup-compare-label" id="textmarkup-compare-label-b"></div>
+        <div id="textmarkup-display-heatmap-view-b" class="textmarkup-display-passage"></div>
+      </div>
+    </div>
     <div id="textmarkup-display-community-view" class="textmarkup-display-community-view hidden"></div>
     <div class="quicktap-hint hidden" id="textmarkup-display-cycle-hint">Press space to switch view</div>
   </div>
@@ -1572,26 +1591,83 @@ let textMarkupPromptsList = [];
 let textMarkupActivePromptId = null;
 let textMarkupResponses = []; // raw {spans} rows for the active prompt
 let textMarkupWords = []; // flat, index-aligned with span {start,end} word indices
-let textMarkupParagraphs = []; // arrays of word indices, one array per paragraph
+let textMarkupRenderedParagraphs = []; // per-paragraph {blank} or {segments: [{type, text, index?}]}
+let textMarkupLocale = 'en';
+let textMarkupComparePromptId = null; // non-null: show this prompt's heatmap alongside the active one
 let textMarkupChartType = 'heatmap';
 const TEXTMARKUP_CHART_TYPES = ['heatmap', 'community'];
 
-// Mirrors kyomei.html's buildPassageMarkup tokenization exactly — spans
-// captured by students are word-index pairs against this same splitting,
-// so the aggregate must tokenize identically or indices won't line up.
-function tokenizeTextMarkupPassage(passageText) {
-  const lines = (passageText || '').split('\n').map(p => p.trim()).filter(Boolean);
-  const words = [];
-  const paragraphs = [];
-  for (const line of lines) {
-    const indices = [];
-    for (const w of line.split(/\s+/).filter(Boolean)) {
-      indices.push(words.length);
-      words.push(w);
+// ---------------------------------------------------------------------
+// Shared passage tokenizer — copy-pasted identically into kyomei.html,
+// kyomei-admin.html, and kyomei-display.html. Word index N must refer to
+// the exact same word in all three (student spans are word-index pairs
+// captured against this), so this function must never drift between
+// files even slightly — same Intl.Segmenter options, same filtering,
+// same fallback.
+// ---------------------------------------------------------------------
+function tokenizePassage(passageText, locale) {
+  const paragraphs = passageText.split('\n'); // do NOT filter or trim —
+  // blank lines are stanza breaks and must survive; leading/trailing
+  // whitespace on a line may be deliberate (poetic indentation).
+
+  let wordIndex = 0;
+  const words = []; // flat array, index N = word N across the whole passage
+  const renderedParagraphs = []; // per-paragraph list of {type: 'word'|'text', ...}
+
+  const segmenterAvailable = typeof Intl !== 'undefined' && Intl.Segmenter;
+  const segmenter = segmenterAvailable
+    ? new Intl.Segmenter(locale || 'en', { granularity: 'word' })
+    : null;
+
+  for (const paraText of paragraphs) {
+    if (paraText === '') {
+      renderedParagraphs.push({ blank: true });
+      continue;
     }
-    paragraphs.push(indices);
+
+    const segments = segmenter
+      ? Array.from(segmenter.segment(paraText))
+      // Fallback for the rare browser without Intl.Segmenter — same
+      // behaviour as before this build, English/whitespace-delimited
+      // languages only.
+      : paraText.split(/(\s+)/).map(s => ({ segment: s, isWordLike: /\S/.test(s) }));
+
+    const renderedSegments = [];
+    for (const seg of segments) {
+      if (seg.isWordLike) {
+        const idx = wordIndex++;
+        words.push(seg.segment);
+        renderedSegments.push({ type: 'word', text: seg.segment, index: idx });
+      } else {
+        renderedSegments.push({ type: 'text', text: seg.segment });
+      }
+    }
+    renderedParagraphs.push({ blank: false, segments: renderedSegments });
   }
-  return { words, paragraphs };
+
+  return { words, renderedParagraphs };
+}
+
+// RTL/no-space locale helpers — also kept identical across all three
+// files for the same reason as the tokenizer above (consistent
+// direction/spacing behaviour everywhere a passage is rendered).
+const RTL_LOCALES = new Set(['ar', 'he', 'fa', 'ur', 'ps', 'sd', 'ug', 'yi']);
+const NO_SPACE_LOCALES = new Set(['zh', 'ja', 'th', 'lo', 'km', 'my']);
+
+function passageLocaleBase(locale) {
+  return (locale || 'en').split('-')[0].toLowerCase();
+}
+
+function isRtlLocale(locale) {
+  return RTL_LOCALES.has(passageLocaleBase(locale));
+}
+
+function joinWordsForLocale(words, locale) {
+  return words.join(NO_SPACE_LOCALES.has(passageLocaleBase(locale)) ? '' : ' ');
+}
+
+function applyPassageDirection(el, locale) {
+  el.setAttribute('dir', isRtlLocale(locale) ? 'rtl' : 'ltr');
 }
 
 function computeTextMarkupWordCounts(responses, totalWords) {
@@ -1655,19 +1731,30 @@ function heatmapColorForRatio(ratio) {
   return `rgb(${HEATMAP_STOPS[HEATMAP_STOPS.length - 1].color.join(',')})`;
 }
 
-function renderTextMarkupHeatmap(counts) {
-  const container = document.getElementById('textmarkup-display-heatmap-view');
+// containerId defaults to the normal single-view container so every
+// existing call site is unaffected — comparison mode passes the two
+// side-by-side container IDs explicitly instead, calling this same
+// function twice rather than duplicating a second implementation.
+function renderTextMarkupHeatmap(counts, containerId = 'textmarkup-display-heatmap-view') {
+  const container = document.getElementById(containerId);
   const peak = counts.length ? Math.max(0, ...counts) : 0;
-  container.innerHTML = textMarkupParagraphs.map(indices => {
-    const spans = indices.map(i => {
-      const c = counts[i] || 0;
+  container.innerHTML = textMarkupRenderedParagraphs.map(para => {
+    if (para.blank) return `<p>&nbsp;</p>`;
+    const inner = para.segments.map(seg => {
+      if (seg.type !== 'word') return escapeHtml(seg.text);
+      const c = counts[seg.index] || 0;
       const ratio = peak > 0 ? c / peak : 0;
+      // Square-root, not linear — see admin's identical comment: a single
+      // runaway-popular phrase would otherwise flatten genuinely
+      // different levels of moderate agreement elsewhere into equal
+      // faintness against the one outlier peak.
+      const scaledRatio = Math.sqrt(ratio);
       const style = ratio > 0
-        ? ` style="background:${heatmapColorForRatio(ratio)};color:#1a1a1a;border-radius:3px;"`
+        ? ` style="background:${heatmapColorForRatio(scaledRatio)};color:#1a1a1a;border-radius:3px;"`
         : '';
-      return `<span${style}>${escapeHtml(textMarkupWords[i])}</span>`;
-    });
-    return `<p>${spans.join(' ')}</p>`;
+      return `<span${style}>${escapeHtml(seg.text)}</span>`;
+    }).join('');
+    return `<p>${inner}</p>`;
   }).join('');
 }
 
@@ -1679,7 +1766,7 @@ function renderTextMarkupCommunity(counts) {
     return;
   }
   container.innerHTML = runs.map(run => {
-    const phrase = textMarkupWords.slice(run.start, run.end + 1).join(' ');
+    const phrase = joinWordsForLocale(textMarkupWords.slice(run.start, run.end + 1), textMarkupLocale);
     return `<div class="tm-community-row-lg"><span class="tm-community-count-lg">${run.peak}</span><span class="tm-community-phrase-lg">${escapeHtml(phrase)}</span></div>`;
   }).join('');
 }
@@ -1691,7 +1778,9 @@ function updateTextMarkupTotalCount() {
 }
 
 function applyTextMarkupChartTypeVisibility() {
-  document.getElementById('textmarkup-display-heatmap-view').classList.toggle('hidden', textMarkupChartType !== 'heatmap');
+  const isComparing = !!textMarkupComparePromptId;
+  document.getElementById('textmarkup-display-heatmap-view').classList.toggle('hidden', textMarkupChartType !== 'heatmap' || isComparing);
+  document.getElementById('textmarkup-display-compare-view').classList.toggle('hidden', textMarkupChartType !== 'heatmap' || !isComparing);
   document.getElementById('textmarkup-display-community-view').classList.toggle('hidden', textMarkupChartType !== 'community');
 }
 
@@ -1717,11 +1806,17 @@ async function initTextMarkupDisplay(session) {
 
   textMarkupPromptsList = prompts;
   textMarkupActivePromptId = session.active_prompt_id || null;
+  textMarkupComparePromptId = session.text_markup_compare_prompt_id || null;
   resultsRevealed = !!session.results_revealed;
 
-  const tokenized = tokenizeTextMarkupPassage(session.passage_text);
+  textMarkupLocale = session.passage_locale || 'en';
+  const tokenized = tokenizePassage(session.passage_text || '', textMarkupLocale);
   textMarkupWords = tokenized.words;
-  textMarkupParagraphs = tokenized.paragraphs;
+  textMarkupRenderedParagraphs = tokenized.renderedParagraphs;
+  applyPassageDirection(document.getElementById('textmarkup-display-heatmap-view'), textMarkupLocale);
+  applyPassageDirection(document.getElementById('textmarkup-display-heatmap-view-a'), textMarkupLocale);
+  applyPassageDirection(document.getElementById('textmarkup-display-heatmap-view-b'), textMarkupLocale);
+  applyPassageDirection(document.getElementById('textmarkup-display-community-view'), textMarkupLocale);
 
   // Resume wherever admin last cycled to, not always 'heatmap' — a
   // display reload mid-session shouldn't silently fall out of sync.
@@ -1781,8 +1876,28 @@ async function loadTextMarkupAggregate() {
   updateTextMarkupTotalCount();
 
   const counts = computeTextMarkupWordCounts(textMarkupResponses, textMarkupWords.length);
-  renderTextMarkupHeatmap(counts);
   renderTextMarkupCommunity(counts);
+
+  if (textMarkupComparePromptId) {
+    // Same aggregation/rendering as the single-prompt path, called twice
+    // — once per prompt — rather than a second implementation.
+    renderTextMarkupHeatmap(counts, 'textmarkup-display-heatmap-view-a');
+    const promptA = textMarkupPromptsList.find(p => p.id === textMarkupActivePromptId);
+    document.getElementById('textmarkup-compare-label-a').textContent = promptA ? promptA.prompt_text : '';
+
+    const { data: compareData, error: compareError } = await supabaseClient
+      .from('text_markup_responses')
+      .select('spans')
+      .eq('session_id', currentSession.id)
+      .eq('prompt_id', textMarkupComparePromptId);
+    const compareResponses = compareError ? [] : (compareData || []);
+    const compareCounts = computeTextMarkupWordCounts(compareResponses, textMarkupWords.length);
+    renderTextMarkupHeatmap(compareCounts, 'textmarkup-display-heatmap-view-b');
+    const promptB = textMarkupPromptsList.find(p => p.id === textMarkupComparePromptId);
+    document.getElementById('textmarkup-compare-label-b').textContent = promptB ? promptB.prompt_text : '';
+  } else {
+    renderTextMarkupHeatmap(counts);
+  }
 }
 
 let textMarkupResponsesChannel = null;
@@ -1800,7 +1915,9 @@ function setupTextMarkupResponsesSubscription() {
       filter: `session_id=eq.${currentSession.id}`
     }, (payload) => {
       if (!resultsRevealed) return;
-      if (payload.new.prompt_id !== textMarkupActivePromptId) return;
+      // While comparing, a response landing for either prompt on show
+      // should refresh — not just the active one.
+      if (payload.new.prompt_id !== textMarkupActivePromptId && payload.new.prompt_id !== textMarkupComparePromptId) return;
       loadTextMarkupAggregate();
     })
     .on('postgres_changes', {
@@ -1812,7 +1929,9 @@ function setupTextMarkupResponsesSubscription() {
       // Resubmission (upsert) — refetch-and-recompute is cheap at
       // classroom scale, simpler than patching the changed row's spans in.
       if (!resultsRevealed) return;
-      if (payload.new.prompt_id !== textMarkupActivePromptId) return;
+      // While comparing, a response landing for either prompt on show
+      // should refresh — not just the active one.
+      if (payload.new.prompt_id !== textMarkupActivePromptId && payload.new.prompt_id !== textMarkupComparePromptId) return;
       loadTextMarkupAggregate();
     })
     .subscribe((status) => {
@@ -2629,6 +2748,9 @@ function setupSessionsSubscription() {
         const promptChanged = newPromptId !== textMarkupActivePromptId;
         const revealChanged = newRevealed !== resultsRevealed;
 
+        const newComparePromptId = payload.new.text_markup_compare_prompt_id || null;
+        const compareChanged = newComparePromptId !== textMarkupComparePromptId;
+
         if (promptChanged) {
           textMarkupActivePromptId = newPromptId;
           currentSession.active_prompt_id = newPromptId;
@@ -2641,7 +2763,11 @@ function setupSessionsSubscription() {
             textMarkupChartType = 'heatmap';
           }
         }
-        if (promptChanged || revealChanged) {
+        if (compareChanged) {
+          textMarkupComparePromptId = newComparePromptId;
+          currentSession.text_markup_compare_prompt_id = newComparePromptId;
+        }
+        if (promptChanged || revealChanged || compareChanged) {
           await renderTextMarkupDisplayState();
         }
 

@@ -220,6 +220,7 @@
     margin-bottom: 16px;
     -webkit-user-select: text;
     user-select: text;
+    white-space: pre-wrap;
   }
   .tm-para { margin: 0 0 14px; }
   .tm-para:last-child { margin-bottom: 0; }
@@ -633,28 +634,103 @@ async function initTextMarkup(session) {
 
   document.getElementById('textmarkup-session-name-display').textContent = session.name;
 
-  const { html, totalWords } = buildPassageMarkup(session.passage_text || '');
-  document.getElementById('textmarkup-passage').innerHTML = html;
-  totalWordCount = totalWords;
+  const passageLocale = session.passage_locale || 'en';
+  const { words, renderedParagraphs } = tokenizePassage(session.passage_text || '', passageLocale);
+  const passageEl = document.getElementById('textmarkup-passage');
+  passageEl.innerHTML = buildPassageMarkup(renderedParagraphs);
+  applyPassageDirection(passageEl, passageLocale);
+  totalWordCount = words.length;
 
   await renderTextMarkupState();
   showScreen('textmarkup-screen');
   setupTextMarkupSubscription();
 }
 
-function buildPassageMarkup(passageText) {
-  const paragraphs = passageText.split('\n').map(p => p.trim()).filter(Boolean);
+// ---------------------------------------------------------------------
+// Shared passage tokenizer — copy-pasted identically into kyomei.html,
+// kyomei-admin.html, and kyomei-display.html. Word index N must refer to
+// the exact same word in all three (student spans are word-index pairs
+// captured against this), so this function must never drift between
+// files even slightly — same Intl.Segmenter options, same filtering,
+// same fallback.
+// ---------------------------------------------------------------------
+function tokenizePassage(passageText, locale) {
+  const paragraphs = passageText.split('\n'); // do NOT filter or trim —
+  // blank lines are stanza breaks and must survive; leading/trailing
+  // whitespace on a line may be deliberate (poetic indentation).
+
   let wordIndex = 0;
-  const paraHtml = paragraphs.map(para => {
-    const words = para.split(/\s+/).filter(Boolean);
-    const spans = words.map(word => {
-      const span = `<span class="tm-word" data-word-index="${wordIndex}">${escapeHtml(word)}</span>`;
-      wordIndex++;
-      return span;
-    });
-    return `<p class="tm-para">${spans.join(' ')}</p>`;
-  });
-  return { html: paraHtml.join(''), totalWords: wordIndex };
+  const words = []; // flat array, index N = word N across the whole passage
+  const renderedParagraphs = []; // per-paragraph list of {type: 'word'|'text', ...}
+
+  const segmenterAvailable = typeof Intl !== 'undefined' && Intl.Segmenter;
+  const segmenter = segmenterAvailable
+    ? new Intl.Segmenter(locale || 'en', { granularity: 'word' })
+    : null;
+
+  for (const paraText of paragraphs) {
+    if (paraText === '') {
+      renderedParagraphs.push({ blank: true });
+      continue;
+    }
+
+    const segments = segmenter
+      ? Array.from(segmenter.segment(paraText))
+      // Fallback for the rare browser without Intl.Segmenter — same
+      // behaviour as before this build, English/whitespace-delimited
+      // languages only.
+      : paraText.split(/(\s+)/).map(s => ({ segment: s, isWordLike: /\S/.test(s) }));
+
+    const renderedSegments = [];
+    for (const seg of segments) {
+      if (seg.isWordLike) {
+        const idx = wordIndex++;
+        words.push(seg.segment);
+        renderedSegments.push({ type: 'word', text: seg.segment, index: idx });
+      } else {
+        renderedSegments.push({ type: 'text', text: seg.segment });
+      }
+    }
+    renderedParagraphs.push({ blank: false, segments: renderedSegments });
+  }
+
+  return { words, renderedParagraphs };
+}
+
+// RTL locale helper — kept identical to admin/display for the same
+// reason as the tokenizer above (consistent direction behaviour
+// everywhere a passage is rendered). NO_SPACE_LOCALES/joinWordsForLocale
+// exist in admin/display too (for community-view phrase reconstruction)
+// but aren't needed here — this view never rejoins words into a phrase.
+const RTL_LOCALES = new Set(['ar', 'he', 'fa', 'ur', 'ps', 'sd', 'ug', 'yi']);
+
+function passageLocaleBase(locale) {
+  return (locale || 'en').split('-')[0].toLowerCase();
+}
+
+function isRtlLocale(locale) {
+  return RTL_LOCALES.has(passageLocaleBase(locale));
+}
+
+function applyPassageDirection(el, locale) {
+  el.setAttribute('dir', isRtlLocale(locale) ? 'rtl' : 'ltr');
+}
+
+// Capture-view rendering — builds the interactive word-span markup from
+// the shared tokenizer's output. Non-word segments (punctuation,
+// whitespace) render as plain escaped text between spans; a blank
+// paragraph renders as a spacer line rather than being dropped.
+function buildPassageMarkup(renderedParagraphs) {
+  return renderedParagraphs.map(para => {
+    if (para.blank) return `<p class="tm-para">&nbsp;</p>`;
+    const inner = para.segments.map(seg => {
+      if (seg.type === 'word') {
+        return `<span class="tm-word" data-word-index="${seg.index}">${escapeHtml(seg.text)}</span>`;
+      }
+      return escapeHtml(seg.text);
+    }).join('');
+    return `<p class="tm-para">${inner}</p>`;
+  }).join('');
 }
 
 async function renderTextMarkupState() {

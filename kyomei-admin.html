@@ -218,6 +218,8 @@
 
   /* ---- Text markup aggregate views (heatmap / community highlight) ---- */
   .textmarkup-total-count { font-weight: 700; margin-bottom: 12px; }
+  .textmarkup-compare-row { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .textmarkup-compare-row label { font-size: 14px; color: var(--muted); }
   .textmarkup-passage {
     background: var(--panel-2);
     border: 1px solid var(--border);
@@ -227,6 +229,7 @@
     line-height: 1.9;
     text-align: left;
     width: 100%;
+    white-space: pre-wrap;
   }
   .textmarkup-passage .tm-para { margin: 0 0 14px; }
   .textmarkup-passage .tm-para:last-child { margin-bottom: 0; }
@@ -618,6 +621,27 @@
           <button class="ghost" type="button" id="load-test-passage-btn">Load test passage</button>
           <div id="textmarkup-passage-error" class="field-error hidden"></div>
 
+          <label for="new-textmarkup-locale-select">Language</label>
+          <select id="new-textmarkup-locale-select">
+            <option value="en" selected>English (en)</option>
+            <option value="fr">French (fr)</option>
+            <option value="de">German (de)</option>
+            <option value="es">Spanish (es)</option>
+            <option value="it">Italian (it)</option>
+            <option value="pt">Portuguese (pt)</option>
+            <option value="ar">Arabic (ar)</option>
+            <option value="he">Hebrew (he)</option>
+            <option value="zh">Chinese (zh)</option>
+            <option value="ja">Japanese (ja)</option>
+            <option value="th">Thai (th)</option>
+            <option value="ko">Korean (ko)</option>
+            <option value="ru">Russian (ru)</option>
+            <option value="other">Other (specify tag)…</option>
+          </select>
+          <div id="textmarkup-locale-other-field" class="hidden">
+            <input id="new-textmarkup-locale-other-input" type="text" placeholder="BCP-47 tag, e.g. pl or zh-Hant">
+          </div>
+
           <label class="field-subheading">Prompts</label>
           <div class="category-list" id="new-textmarkup-prompt-list"></div>
           <div class="add-cat-row">
@@ -657,6 +681,12 @@
 
       <div id="textmarkup-prompt-picker" class="category-picker-row hidden"></div>
       <div id="textmarkup-waiting-status" class="hidden-status hidden">Pick a prompt above to reveal it to students</div>
+      <div id="textmarkup-compare-row" class="textmarkup-compare-row hidden">
+        <label for="textmarkup-compare-select">Compare with…</label>
+        <select id="textmarkup-compare-select">
+          <option value="">Not comparing</option>
+        </select>
+      </div>
 
       <div id="mediavote-panel" class="hidden">
         <div class="panel mediavote-transport">
@@ -1190,6 +1220,9 @@ function resetNewSessionForm() {
   document.getElementById('new-quicktap-heading').value = '';
   document.getElementById('new-textmarkup-passage').value = '';
   document.getElementById('new-textmarkup-prompt-input').value = '';
+  document.getElementById('new-textmarkup-locale-select').value = 'en';
+  document.getElementById('new-textmarkup-locale-other-input').value = '';
+  document.getElementById('textmarkup-locale-other-field').classList.add('hidden');
   document.getElementById('new-mediavote-entry-input').value = '';
   document.getElementById('code-error').classList.add('hidden');
   document.getElementById('category-error').classList.add('hidden');
@@ -1376,6 +1409,10 @@ document.getElementById('load-test-passage-btn').addEventListener('click', () =>
   renderTextMarkupPromptChips();
 });
 
+document.getElementById('new-textmarkup-locale-select').addEventListener('change', (e) => {
+  document.getElementById('textmarkup-locale-other-field').classList.toggle('hidden', e.target.value !== 'other');
+});
+
 function validateSessionCode(code) {
   return /^[A-Za-z0-9_-]+$/.test(code);
 }
@@ -1489,6 +1526,15 @@ document.getElementById('create-session-btn').addEventListener('click', async ()
   const oneVotePerDevice = document.getElementById('new-one-vote-checkbox').checked;
   const guidedEnabled = document.getElementById('new-guided-checkbox').checked;
 
+  const textmarkupLocaleSelect = document.getElementById('new-textmarkup-locale-select').value;
+  const textmarkupLocaleOther = document.getElementById('new-textmarkup-locale-other-input').value.trim();
+  // 'other' with nothing typed just falls back to English — keeping the
+  // form simple was the point of tying direction/segmentation to this
+  // one field, not worth a hard validation error over.
+  const textmarkupLocale = textmarkupLocaleSelect === 'other'
+    ? (textmarkupLocaleOther || 'en')
+    : textmarkupLocaleSelect;
+
   const { data: session, error: sessionError } = await supabaseClient
     .from('sessions')
     .insert({
@@ -1500,6 +1546,7 @@ document.getElementById('create-session-btn').addEventListener('click', async ()
       quick_tap_heading: newSessionMode === 'quicktap' ? quicktapHeading : null,
       text_markup_enabled: newSessionMode === 'textmarkup',
       passage_text: newSessionMode === 'textmarkup' ? textmarkupPassage : null,
+      passage_locale: newSessionMode === 'textmarkup' ? textmarkupLocale : 'en',
       media_vote_enabled: newSessionMode === 'mediavote',
       media_source_type: newSessionMode === 'mediavote' ? newMediaVoteSourceType : null,
       media_entry_id: (newSessionMode === 'mediavote' && newMediaVoteSourceType === 'mmutube') ? mediaEntryId : null
@@ -1604,6 +1651,7 @@ function updateRevealUI() {
     mvTimeline.classList.add('hidden');
     const wasHidden = tmCount.classList.contains('hidden');
     tmCount.classList.toggle('hidden', !resultsRevealed);
+    document.getElementById('textmarkup-compare-row').classList.toggle('hidden', !resultsRevealed);
     if (wasHidden && resultsRevealed) {
       // Always land on the fuller picture first when results are newly revealed.
       textMarkupChartType = 'heatmap';
@@ -1746,28 +1794,84 @@ let textMarkupPrompts = [];
 let activePromptId = null;
 let textMarkupResponses = []; // raw {spans} rows for the active prompt
 let textMarkupWords = []; // flat, index-aligned with span {start,end} word indices
-let textMarkupParagraphs = []; // arrays of word indices, one array per paragraph
+let textMarkupRenderedParagraphs = []; // per-paragraph {blank} or {segments: [{type, text, index?}]}
+let textMarkupLocale = 'en';
 let textMarkupChannel = null;
 let textMarkupReconnectTimer = null;
 let textMarkupChartType = 'heatmap';
 const TEXTMARKUP_CHART_TYPES = ['heatmap', 'community'];
 
-// Mirrors kyomei.html's buildPassageMarkup tokenization exactly — spans
-// captured by students are word-index pairs against this same splitting,
-// so admin's aggregate must tokenize identically or indices won't line up.
-function tokenizeTextMarkupPassage(passageText) {
-  const lines = (passageText || '').split('\n').map(p => p.trim()).filter(Boolean);
-  const words = [];
-  const paragraphs = [];
-  for (const line of lines) {
-    const indices = [];
-    for (const w of line.split(/\s+/).filter(Boolean)) {
-      indices.push(words.length);
-      words.push(w);
+// ---------------------------------------------------------------------
+// Shared passage tokenizer — copy-pasted identically into kyomei.html,
+// kyomei-admin.html, and kyomei-display.html. Word index N must refer to
+// the exact same word in all three (student spans are word-index pairs
+// captured against this), so this function must never drift between
+// files even slightly — same Intl.Segmenter options, same filtering,
+// same fallback.
+// ---------------------------------------------------------------------
+function tokenizePassage(passageText, locale) {
+  const paragraphs = passageText.split('\n'); // do NOT filter or trim —
+  // blank lines are stanza breaks and must survive; leading/trailing
+  // whitespace on a line may be deliberate (poetic indentation).
+
+  let wordIndex = 0;
+  const words = []; // flat array, index N = word N across the whole passage
+  const renderedParagraphs = []; // per-paragraph list of {type: 'word'|'text', ...}
+
+  const segmenterAvailable = typeof Intl !== 'undefined' && Intl.Segmenter;
+  const segmenter = segmenterAvailable
+    ? new Intl.Segmenter(locale || 'en', { granularity: 'word' })
+    : null;
+
+  for (const paraText of paragraphs) {
+    if (paraText === '') {
+      renderedParagraphs.push({ blank: true });
+      continue;
     }
-    paragraphs.push(indices);
+
+    const segments = segmenter
+      ? Array.from(segmenter.segment(paraText))
+      // Fallback for the rare browser without Intl.Segmenter — same
+      // behaviour as before this build, English/whitespace-delimited
+      // languages only.
+      : paraText.split(/(\s+)/).map(s => ({ segment: s, isWordLike: /\S/.test(s) }));
+
+    const renderedSegments = [];
+    for (const seg of segments) {
+      if (seg.isWordLike) {
+        const idx = wordIndex++;
+        words.push(seg.segment);
+        renderedSegments.push({ type: 'word', text: seg.segment, index: idx });
+      } else {
+        renderedSegments.push({ type: 'text', text: seg.segment });
+      }
+    }
+    renderedParagraphs.push({ blank: false, segments: renderedSegments });
   }
-  return { words, paragraphs };
+
+  return { words, renderedParagraphs };
+}
+
+// RTL/no-space locale helpers — also kept identical across all three
+// files for the same reason as the tokenizer above (consistent
+// direction/spacing behaviour everywhere a passage is rendered).
+const RTL_LOCALES = new Set(['ar', 'he', 'fa', 'ur', 'ps', 'sd', 'ug', 'yi']);
+const NO_SPACE_LOCALES = new Set(['zh', 'ja', 'th', 'lo', 'km', 'my']);
+
+function passageLocaleBase(locale) {
+  return (locale || 'en').split('-')[0].toLowerCase();
+}
+
+function isRtlLocale(locale) {
+  return RTL_LOCALES.has(passageLocaleBase(locale));
+}
+
+function joinWordsForLocale(words, locale) {
+  return words.join(NO_SPACE_LOCALES.has(passageLocaleBase(locale)) ? '' : ' ');
+}
+
+function applyPassageDirection(el, locale) {
+  el.setAttribute('dir', isRtlLocale(locale) ? 'rtl' : 'ltr');
 }
 
 function computeTextMarkupWordCounts(responses, totalWords) {
@@ -1834,16 +1938,23 @@ function heatmapColorForRatio(ratio) {
 function renderTextMarkupHeatmap(counts) {
   const container = document.getElementById('textmarkup-heatmap-view');
   const peak = counts.length ? Math.max(0, ...counts) : 0;
-  container.innerHTML = textMarkupParagraphs.map(indices => {
-    const spans = indices.map(i => {
-      const c = counts[i] || 0;
+  container.innerHTML = textMarkupRenderedParagraphs.map(para => {
+    if (para.blank) return `<p class="tm-para">&nbsp;</p>`;
+    const inner = para.segments.map(seg => {
+      if (seg.type !== 'word') return escapeHtml(seg.text);
+      const c = counts[seg.index] || 0;
       const ratio = peak > 0 ? c / peak : 0;
+      // Square-root, not linear — a single runaway-popular phrase would
+      // otherwise drag every other word's relative intensity down with
+      // it, flattening genuinely different levels of moderate agreement
+      // elsewhere into equal faintness against the one outlier peak.
+      const scaledRatio = Math.sqrt(ratio);
       const style = ratio > 0
-        ? ` style="background:${heatmapColorForRatio(ratio)};color:#1a1a1a;border-radius:3px;"`
+        ? ` style="background:${heatmapColorForRatio(scaledRatio)};color:#1a1a1a;border-radius:3px;"`
         : '';
-      return `<span${style}>${escapeHtml(textMarkupWords[i])}</span>`;
-    });
-    return `<p class="tm-para">${spans.join(' ')}</p>`;
+      return `<span${style}>${escapeHtml(seg.text)}</span>`;
+    }).join('');
+    return `<p class="tm-para">${inner}</p>`;
   }).join('');
 }
 
@@ -1855,7 +1966,7 @@ function renderTextMarkupCommunity(counts) {
     return;
   }
   container.innerHTML = runs.map(run => {
-    const phrase = textMarkupWords.slice(run.start, run.end + 1).join(' ');
+    const phrase = joinWordsForLocale(textMarkupWords.slice(run.start, run.end + 1), textMarkupLocale);
     return `<div class="tm-community-row"><span class="tm-community-count">${run.peak}</span><span class="tm-community-phrase">${escapeHtml(phrase)}</span></div>`;
   }).join('');
 }
@@ -1925,23 +2036,71 @@ function applyTextMarkupVisibility() {
   document.getElementById('textmarkup-waiting-status').classList.toggle('hidden', !!activePromptId);
 }
 
+// Excludes whichever prompt is currently active — comparing a prompt
+// against itself is meaningless. Only meaningful once results_revealed
+// (same gate as every other aggregate view here), so visibility is
+// handled by updateRevealUI, not this render function.
+function renderComparePicker() {
+  const select = document.getElementById('textmarkup-compare-select');
+  const currentValue = currentSession ? (currentSession.text_markup_compare_prompt_id || '') : '';
+  select.innerHTML = '<option value="">Not comparing</option>' +
+    textMarkupPrompts
+      .filter(p => p.id !== activePromptId)
+      .map(p => `<option value="${p.id}">${escapeHtml(p.prompt_text)}</option>`)
+      .join('');
+  select.value = currentValue;
+}
+
+async function setCompareTextMarkupPrompt(promptId) {
+  if (!currentSession) return;
+  const previous = currentSession.text_markup_compare_prompt_id || null;
+  const newValue = promptId || null;
+  currentSession.text_markup_compare_prompt_id = newValue;
+
+  const { error } = await supabaseClient
+    .from('sessions')
+    .update({ text_markup_compare_prompt_id: newValue })
+    .eq('id', currentSession.id);
+
+  if (error) {
+    currentSession.text_markup_compare_prompt_id = previous;
+    renderComparePicker();
+    handleQueryError(error);
+  }
+}
+
+document.getElementById('textmarkup-compare-select').addEventListener('change', (e) => {
+  setCompareTextMarkupPrompt(e.target.value || null);
+});
+
 async function setActivePrompt(promptId) {
   const previous = activePromptId;
   activePromptId = promptId;
   renderPromptPicker();
+  renderComparePicker();
   applyTextMarkupVisibility();
   textMarkupChartType = 'heatmap';
   applyTextMarkupChartTypeVisibility();
   await loadTextMarkupAggregate();
 
+  const updatePayload = { active_prompt_id: promptId };
+  // A comparison against the prompt that's now active would be
+  // comparing it against itself — clear it rather than leaving a stale,
+  // self-referential comparison in place.
+  const shouldClearCompare = currentSession.text_markup_compare_prompt_id === promptId;
+  if (shouldClearCompare) {
+    updatePayload.text_markup_compare_prompt_id = null;
+  }
+
   const { error } = await supabaseClient
     .from('sessions')
-    .update({ active_prompt_id: promptId })
+    .update(updatePayload)
     .eq('id', currentSession.id);
 
   if (error) {
     activePromptId = previous;
     renderPromptPicker();
+    renderComparePicker();
     applyTextMarkupVisibility();
     await loadTextMarkupAggregate();
     handleQueryError(error);
@@ -1949,6 +2108,10 @@ async function setActivePrompt(promptId) {
   }
 
   currentSession.active_prompt_id = promptId;
+  if (shouldClearCompare) {
+    currentSession.text_markup_compare_prompt_id = null;
+    renderComparePicker();
+  }
 }
 
 async function loadTextMarkupAggregate() {
@@ -2699,13 +2862,17 @@ async function enterSession(session) {
     document.getElementById('results-hidden-status').classList.add('hidden');
     document.getElementById('tally-grid').classList.add('hidden');
 
-    const tokenized = tokenizeTextMarkupPassage(session.passage_text);
+    textMarkupLocale = session.passage_locale || 'en';
+    const tokenized = tokenizePassage(session.passage_text || '', textMarkupLocale);
     textMarkupWords = tokenized.words;
-    textMarkupParagraphs = tokenized.paragraphs;
+    textMarkupRenderedParagraphs = tokenized.renderedParagraphs;
+    applyPassageDirection(document.getElementById('textmarkup-heatmap-view'), textMarkupLocale);
+    applyPassageDirection(document.getElementById('textmarkup-community-view'), textMarkupLocale);
 
     activePromptId = session.active_prompt_id || null;
     await loadTextMarkupPrompts();
     renderPromptPicker();
+    renderComparePicker();
     applyTextMarkupVisibility();
 
     textMarkupChartType = 'heatmap';
