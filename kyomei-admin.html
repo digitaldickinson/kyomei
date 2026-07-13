@@ -45,6 +45,8 @@
   button.danger { background: var(--danger); color: #fff; }
   button.warning { background: var(--warning); color: #1a1200; }
   button.warning:hover { filter: brightness(1.08); }
+  button.ok { background: var(--ok); color: #fff; }
+  button.ok:hover { filter: brightness(1.08); }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   input, textarea, select {
     font-family: inherit;
@@ -611,7 +613,7 @@
       <div id="mediavote-panel" class="hidden">
         <div class="panel mediavote-transport">
           <div class="mediavote-transport-row">
-            <button class="primary" type="button" id="media-playpause-btn">Play</button>
+            <button class="ok" type="button" id="media-playpause-btn">Play</button>
             <button class="ghost" type="button" id="media-restart-btn">Restart</button>
           </div>
           <div class="mediavote-seek-row">
@@ -1911,7 +1913,11 @@ function formatMsToMmSs(ms) {
 
 function updateMediaTransportUI() {
   const btn = document.getElementById('media-playpause-btn');
-  if (btn) btn.textContent = mediaVoteIsPlaying ? 'Pause' : 'Play';
+  if (btn) {
+    btn.textContent = mediaVoteIsPlaying ? 'Pause' : 'Play';
+    btn.classList.toggle('ok', !mediaVoteIsPlaying);
+    btn.classList.toggle('warning', mediaVoteIsPlaying);
+  }
   const seekInput = document.getElementById('media-seek-input');
   // Don't stomp on what the tutor is mid-typing in the seek box.
   if (seekInput && document.activeElement !== seekInput) {
