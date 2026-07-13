@@ -2071,6 +2071,12 @@ async function loadMediaVoteKaltura(entryId) {
     });
 
     try {
+      // Without this, play()/pause() race loadMedia(): play() registers
+      // an intent to start once loading finishes (media isn't ready yet),
+      // pause() fires immediately after with nothing to actually pause,
+      // and the pending play intent then executes uncontrolled once
+      // loading completes a moment later.
+      await player.ready();
       player.play();
       player.pause();
     } catch (e) {
