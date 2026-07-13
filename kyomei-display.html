@@ -416,25 +416,30 @@
     width: min(90vw, 480px);
   }
   .field-error { color: var(--danger); font-size: 0.9rem; margin-top: -6px; }
-  #mediavote-display-screen { padding: 0; }
+  /* The video (or kaltura player) shares the screen with the timeline
+     below it now, rather than being swapped away on reveal — the video
+     takes whatever vertical space the timeline strip isn't using. */
+  #mediavote-display-screen { padding: 0; flex-direction: column; justify-content: flex-start; }
   .mediavote-filepicker { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+  #mediavote-display-screen .mediavote-filepicker { flex: 1; justify-content: center; width: 100%; }
   .mediavote-filepicker-title { font-size: clamp(1.4rem, 2.4vw, 2.2rem); color: var(--muted); }
-  .mediavote-video { width: 100vw; height: 100vh; object-fit: contain; background: #000; }
-  .mediavote-kaltura-container { width: 100vw; height: 100vh; }
+  .mediavote-video { width: 100vw; flex: 1; min-height: 0; object-fit: contain; background: #000; }
+  .mediavote-kaltura-container { width: 100vw; flex: 1; min-height: 0; }
   .mediavote-timeline-screen {
     width: 100%;
-    height: 100vh;
+    flex-shrink: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    gap: 24px;
-    padding: 4vw;
+    gap: 16px;
+    padding: 20px 4vw;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
   }
+  .mediavote-display-timeline-wrap { position: relative; width: 100%; max-width: 1400px; }
   .mediavote-display-timeline-strip {
     display: flex;
     width: 100%;
-    max-width: 1400px;
     height: clamp(60px, 10vh, 120px);
     border-radius: 12px;
     overflow: hidden;
@@ -445,6 +450,16 @@
   .mediavote-display-timeline-legend { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; }
   .mediavote-display-legend-item { display: flex; align-items: center; gap: 8px; font-size: clamp(1rem, 1.6vw, 1.3rem); color: var(--text); }
   .mediavote-display-legend-swatch { width: 20px; height: 20px; border-radius: 5px; flex-shrink: 0; }
+  .mediavote-playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: #fff;
+    box-shadow: 0 0 6px rgba(255,255,255,0.8);
+    pointer-events: none;
+    transform: translateX(-1.5px);
+  }
   .mediavote-error {
     position: fixed;
     top: 16px;
@@ -577,7 +592,10 @@
   <video id="mediavote-video" class="mediavote-video hidden" playsinline></video>
   <div id="mediavote-kaltura-container" class="mediavote-kaltura-container hidden"></div>
   <div id="mediavote-timeline-screen" class="mediavote-timeline-screen hidden">
-    <div id="mediavote-display-timeline-strip" class="mediavote-display-timeline-strip"></div>
+    <div class="mediavote-display-timeline-wrap">
+      <div id="mediavote-display-timeline-strip" class="mediavote-display-timeline-strip"></div>
+      <div id="mediavote-display-playhead" class="mediavote-playhead hidden"></div>
+    </div>
     <div id="mediavote-display-timeline-legend" class="mediavote-display-timeline-legend"></div>
   </div>
 </div>
@@ -1968,7 +1986,8 @@ function makeVideoAdapter(video) {
   return {
     play: () => video.play().catch(() => {}),
     pause: () => video.pause(),
-    setCurrentTime: (seconds) => { video.currentTime = seconds; }
+    setCurrentTime: (seconds) => { video.currentTime = seconds; },
+    getCurrentTime: () => video.currentTime
   };
 }
 
@@ -1976,7 +1995,8 @@ function makeKalturaAdapter(player) {
   return {
     play: () => { try { player.play(); } catch (e) {} },
     pause: () => { try { player.pause(); } catch (e) {} },
-    setCurrentTime: (seconds) => { try { player.currentTime = seconds; } catch (e) {} }
+    setCurrentTime: (seconds) => { try { player.currentTime = seconds; } catch (e) {} },
+    getCurrentTime: () => { try { return player.currentTime || 0; } catch (e) { return 0; } }
   };
 }
 
@@ -2141,9 +2161,12 @@ function mediaVoteOptionById(optionId) {
 
 // Visual strip + legend only — the precise per-bucket breakdown is
 // admin-only (room-scale legibility over precision on the display).
+let mediaVoteTimelineTotalSeconds = 0;
+
 function renderMediaVoteDisplayTimeline() {
   const positions = reconstructMediaVotePositions(mediaVoteRawEvents, mediaVoteRawResponses);
   const buckets = bucketMediaVoteTimeline(positions, mediaTimelineBucketSeconds);
+  mediaVoteTimelineTotalSeconds = buckets.length * mediaTimelineBucketSeconds;
 
   const strip = document.getElementById('mediavote-display-timeline-strip');
   const legend = document.getElementById('mediavote-display-timeline-legend');
@@ -2164,6 +2187,40 @@ function renderMediaVoteDisplayTimeline() {
       <span>${escapeHtml(opt.label)}</span>
     </div>
   `).join('');
+
+  updateDisplayPlayhead();
+}
+
+// Polls the real player's actual current position (not an estimate —
+// display genuinely has it) on a short interval regardless of play/pause
+// state, which naturally freezes the line in place when paused since
+// currentTime itself stops changing.
+let displayPlayheadTimer = null;
+
+function updateDisplayPlayhead() {
+  const playhead = document.getElementById('mediavote-display-playhead');
+  if (!playhead) return;
+  if (!activeMediaAdapter || mediaVoteTimelineTotalSeconds <= 0) {
+    playhead.classList.add('hidden');
+    return;
+  }
+  const currentSeconds = activeMediaAdapter.getCurrentTime();
+  const pct = Math.min(100, Math.max(0, (currentSeconds / mediaVoteTimelineTotalSeconds) * 100));
+  playhead.style.left = pct + '%';
+  playhead.classList.remove('hidden');
+}
+
+function startDisplayPlayheadTicker() {
+  stopDisplayPlayheadTicker();
+  updateDisplayPlayhead();
+  displayPlayheadTimer = setInterval(updateDisplayPlayhead, 200);
+}
+
+function stopDisplayPlayheadTicker() {
+  if (displayPlayheadTimer) {
+    clearInterval(displayPlayheadTimer);
+    displayPlayheadTimer = null;
+  }
 }
 
 async function loadMediaVoteTimelineData() {
@@ -2190,35 +2247,11 @@ async function loadMediaVoteTimelineData() {
   mediaVoteTimelineOptions = optionsRes.data || [];
 }
 
-// Revealing swaps the whole screen from watch-and-vote to discuss-the-
-// timeline — the clip itself isn't needed once the tutor's walking
-// through how consensus evolved.
-function showMediaVoteTimelineView() {
-  document.getElementById('mediavote-filepicker').classList.add('hidden');
-  document.getElementById('mediavote-kaltura-prompt').classList.add('hidden');
-  document.getElementById('mediavote-video').classList.add('hidden');
-  document.getElementById('mediavote-kaltura-container').classList.add('hidden');
-  document.getElementById('mediavote-timeline-screen').classList.remove('hidden');
-}
-
-// Un-revealing (or initial load pre-reveal) restores whichever state the
-// clip/player was actually in — already loaded (just re-show it) or never
-// loaded yet (show the picker/prompt again), per source type.
-function showMediaVoteNonTimelineView() {
-  document.getElementById('mediavote-timeline-screen').classList.add('hidden');
-  if (activeMediaAdapter) {
-    if (mediaVoteSourceType === 'mmutube') {
-      document.getElementById('mediavote-kaltura-container').classList.remove('hidden');
-    } else {
-      document.getElementById('mediavote-video').classList.remove('hidden');
-    }
-  } else {
-    if (mediaVoteSourceType === 'mmutube') {
-      document.getElementById('mediavote-kaltura-prompt').classList.remove('hidden');
-    } else {
-      document.getElementById('mediavote-filepicker').classList.remove('hidden');
-    }
-  }
+// Revealing no longer hides the video/player — it stays visible above the
+// timeline strip at all times, undisturbed by the reveal toggle. This
+// just shows/hides the timeline area beneath it.
+function setMediaVoteTimelineVisible(visible) {
+  document.getElementById('mediavote-timeline-screen').classList.toggle('hidden', !visible);
 }
 
 async function initMediaVoteDisplay(session) {
@@ -2282,9 +2315,10 @@ async function initMediaVoteDisplay(session) {
   if (resultsRevealed) {
     await loadMediaVoteTimelineData();
     renderMediaVoteDisplayTimeline();
-    showMediaVoteTimelineView();
   }
+  setMediaVoteTimelineVisible(resultsRevealed);
 
+  startDisplayPlayheadTicker();
   setupSessionsSubscription();
   setupMediaVoteResponsesSubscription();
 }
@@ -2592,10 +2626,11 @@ function setupSessionsSubscription() {
           if (resultsRevealed) {
             await loadMediaVoteTimelineData();
             renderMediaVoteDisplayTimeline();
-            showMediaVoteTimelineView();
-          } else {
-            showMediaVoteNonTimelineView();
           }
+          // The video/player itself is untouched here — only the timeline
+          // area's visibility changes; playback keeps doing whatever it
+          // was already doing, undisturbed.
+          setMediaVoteTimelineVisible(resultsRevealed);
         } else if (bucketChanged && resultsRevealed) {
           // Cheap re-bucket of already-fetched data — no refetch needed
           // just because the slider moved.

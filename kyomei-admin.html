@@ -337,6 +337,7 @@
   .mediavote-count-label { color: var(--muted); font-size: 14px; margin-bottom: 4px; }
   .mediavote-count-value { font-size: 40px; font-weight: 800; }
   .mediavote-bucket-label { color: var(--muted); font-size: 14px; margin-bottom: 8px; }
+  .mediavote-timeline-wrap { position: relative; cursor: pointer; }
   .mediavote-timeline-strip {
     display: flex;
     width: 100%;
@@ -347,6 +348,16 @@
   }
   .mediavote-timeline-segment { flex: 1; border-right: 1px solid var(--bg); }
   .mediavote-timeline-segment:last-child { border-right: none; }
+  .mediavote-playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: #fff;
+    box-shadow: 0 0 4px rgba(255,255,255,0.7);
+    pointer-events: none;
+    transform: translateX(-1px);
+  }
   .mediavote-timeline-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; }
   .mediavote-legend-item { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); }
   .mediavote-legend-swatch { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
@@ -695,7 +706,10 @@
         <div class="quicktap-hint" id="textmarkup-cycle-hint">Press space to switch view</div>
       </div>
       <div id="mediavote-timeline-display" class="hidden">
-        <div id="mediavote-timeline-strip" class="mediavote-timeline-strip"></div>
+        <div id="mediavote-timeline-wrap" class="mediavote-timeline-wrap">
+          <div id="mediavote-timeline-strip" class="mediavote-timeline-strip"></div>
+          <div id="mediavote-playhead" class="mediavote-playhead hidden"></div>
+        </div>
         <div id="mediavote-timeline-legend" class="mediavote-timeline-legend"></div>
         <div id="mediavote-timeline-breakdown" class="mediavote-timeline-breakdown"></div>
       </div>
@@ -2039,6 +2053,7 @@ function updateMediaTransportUI() {
     seekInput.value = formatMsToMmSs(currentSession ? currentSession.media_transport_position_ms : 0);
   }
   updateMediaVotePositionReadout();
+  updateMediaVotePlayhead();
 }
 
 // media_transport_position_ms only ever holds wherever the *last* command
@@ -2078,14 +2093,35 @@ function updateMediaVotePositionReadout() {
   el.textContent = `Est. position: ${formatMsToMmSs(estimateCurrentPositionMs())}`;
 }
 
+// Same estimated-position logic as the readout above (not a second
+// independent implementation) — admin has no video element, so this is
+// an estimate to cross-check against the display's genuinely accurate
+// line, not ground truth itself.
+function updateMediaVotePlayhead() {
+  const playhead = document.getElementById('mediavote-playhead');
+  if (!playhead) return;
+  if (!currentSession || !currentSession.media_transport_action || mediaVoteTimelineTotalSeconds <= 0) {
+    playhead.classList.add('hidden');
+    return;
+  }
+  const currentSeconds = estimateCurrentPositionMs() / 1000;
+  const pct = Math.min(100, Math.max(0, (currentSeconds / mediaVoteTimelineTotalSeconds) * 100));
+  playhead.style.left = pct + '%';
+  playhead.classList.remove('hidden');
+}
+
 let mediaVotePositionTickTimer = null;
 
 function startMediaVotePositionTicker() {
   stopMediaVotePositionTicker();
   updateMediaVotePositionReadout();
+  updateMediaVotePlayhead();
   // A glance-at readout, not a stopwatch — 250ms is enough to read as
   // smoothly ticking upward without a redundant per-frame timer.
-  mediaVotePositionTickTimer = setInterval(updateMediaVotePositionReadout, 250);
+  mediaVotePositionTickTimer = setInterval(() => {
+    updateMediaVotePositionReadout();
+    updateMediaVotePlayhead();
+  }, 250);
 }
 
 function stopMediaVotePositionTicker() {
@@ -2281,6 +2317,7 @@ let mediaTimelineBucketSeconds = 5;
 let mediaVoteRawEvents = []; // {action, position_ms, created_at}, ascending
 let mediaVoteRawResponses = []; // {option_id, created_at}, ascending
 let mediaVoteTimelineOptions = []; // quick_tap_options rows, for colour + legend
+let mediaVoteTimelineTotalSeconds = 0; // bucketCount * bucketSeconds — the scale the playhead/click-seek map onto
 
 // Single sweep over both sorted-by-created_at lists — not a per-vote
 // search against the full events list. A vote landing before any
@@ -2406,10 +2443,24 @@ function renderMediaVoteTimelineBreakdown(buckets) {
 function renderMediaVoteTimeline() {
   const positions = reconstructMediaVotePositions(mediaVoteRawEvents, mediaVoteRawResponses);
   const buckets = bucketMediaVoteTimeline(positions, mediaTimelineBucketSeconds);
+  mediaVoteTimelineTotalSeconds = buckets.length * mediaTimelineBucketSeconds;
   renderMediaVoteTimelineStrip(buckets);
   renderMediaVoteTimelineLegend();
   renderMediaVoteTimelineBreakdown(buckets);
+  updateMediaVotePlayhead();
 }
+
+// Maps a click's pixel offset onto the same seconds scale used to render
+// the buckets, then reuses the existing Seek transport path exactly as
+// the Seek button/slider already do — preserves whatever play/pause
+// state currently applies, since 'seek' never touches that.
+document.getElementById('mediavote-timeline-wrap').addEventListener('click', async (e) => {
+  if (!currentSession || mediaVoteTimelineTotalSeconds <= 0) return;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const fraction = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+  const seconds = fraction * mediaVoteTimelineTotalSeconds;
+  await sendTransportCommand('seek', Math.round(seconds * 1000));
+});
 
 async function loadMediaVoteTimelineData() {
   const [eventsRes, votesRes, optionsRes] = await Promise.all([
