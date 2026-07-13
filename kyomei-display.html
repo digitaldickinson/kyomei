@@ -391,6 +391,40 @@
     font-size: clamp(1.2rem, 1.8vw, 1.7rem);
     color: var(--text);
   }
+
+  /* ---- Media Vote display: file picker + remote-driven video ---- */
+  .display-btn {
+    font-family: inherit;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 14px 24px;
+    font-size: clamp(1rem, 1.4vw, 1.3rem);
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .display-btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  #mediavote-display-screen { padding: 0; }
+  .mediavote-filepicker { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+  .mediavote-filepicker-title { font-size: clamp(1.4rem, 2.4vw, 2.2rem); color: var(--muted); }
+  .mediavote-video { width: 100vw; height: 100vh; object-fit: contain; background: #000; }
+  .idle-test-video-btn { margin-top: 32px; }
+
+  /* ---- Standalone playback test — local only, no session/Supabase involved ---- */
+  .video-test-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 950;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 4vw;
+  }
+  .video-test-close-btn { position: absolute; top: 24px; right: 24px; }
 </style>
 </head>
 <body>
@@ -409,6 +443,17 @@
   <div class="join-session-name" id="idle-session-name"></div>
   <div id="idle-qr" class="join-qr-box"></div>
   <div class="join-url" id="idle-url-text"></div>
+  <button type="button" class="display-btn ghost idle-test-video-btn" id="idle-test-video-btn">Test video playback</button>
+</div>
+
+<div id="video-test-overlay" class="video-test-overlay hidden">
+  <div id="video-test-picker" class="mediavote-filepicker">
+    <div class="mediavote-filepicker-title">Pick a clip to test playback</div>
+    <button type="button" class="display-btn" id="video-test-pick-btn">Choose file…</button>
+    <input type="file" id="video-test-file-fallback" accept="video/*,audio/*" class="hidden">
+  </div>
+  <video id="video-test-el" class="mediavote-video hidden" controls playsinline></video>
+  <button type="button" class="display-btn ghost video-test-close-btn" id="video-test-close-btn">Close</button>
 </div>
 
 <div id="join-info-overlay" class="join-info-overlay hidden">
@@ -454,6 +499,16 @@
   </div>
 </div>
 
+<div id="mediavote-display-screen" class="screen hidden">
+  <div id="mediavote-filepicker" class="mediavote-filepicker">
+    <div class="mediavote-filepicker-title">Load the clip for this session</div>
+    <button type="button" class="display-btn" id="mediavote-pick-btn">Choose file…</button>
+    <button type="button" class="display-btn ghost hidden" id="mediavote-resume-btn"></button>
+    <input type="file" id="mediavote-file-fallback" accept="video/*,audio/*" class="hidden">
+  </div>
+  <video id="mediavote-video" class="mediavote-video hidden" playsinline></video>
+</div>
+
 <script>
 // ======================================================================
 // CONFIG — fill in before deploying. anon/public key only — NEVER the
@@ -487,7 +542,7 @@ function escapeHtml(str) {
 }
 
 function showScreen(id) {
-  ['loading-screen', 'invalid-session-screen', 'idle-screen', 'feed-screen', 'quicktap-display-screen', 'textmarkup-display-screen'].forEach(s => {
+  ['loading-screen', 'invalid-session-screen', 'idle-screen', 'feed-screen', 'quicktap-display-screen', 'textmarkup-display-screen', 'mediavote-display-screen'].forEach(s => {
     document.getElementById(s).classList.toggle('hidden', s !== id);
   });
 }
@@ -583,6 +638,9 @@ async function init() {
   } else if (session.text_markup_enabled) {
     displayMode = 'textmarkup';
     await initTextMarkupDisplay(session);
+  } else if (session.media_vote_enabled) {
+    displayMode = 'mediavote';
+    await initMediaVoteDisplay(session);
   } else if (session.guided_categories) {
     displayMode = 'guided';
     await initGuidedDisplay(session);
@@ -1683,6 +1741,235 @@ function teardownTextMarkupResponsesSubscription() {
   }
 }
 
+// ---------------- Media Vote: local file picker (shared: session clip + standalone test) ----------------
+// Feature-detects the File System Access API and uses it where available
+// (gives handle persistence across reloads via IndexedDB — a "resume
+// clip.mp4?" prompt next load); falls back to a plain <input type="file">
+// where it isn't (Safari, Firefox, and generally — variable university
+// IT). The fallback has no persistence across reloads — accepted, known
+// limitation, not a bug to solve here.
+async function pickVideoFile(fallbackInputId) {
+  if (window.showOpenFilePicker) {
+    try {
+      const [handle] = await window.showOpenFilePicker({
+        types: [{ description: 'Video or audio', accept: { 'video/*': [], 'audio/*': [] } }]
+      });
+      const file = await handle.getFile();
+      return { file, handle };
+    } catch (e) {
+      return null; // user cancelled the picker — not an error to surface
+    }
+  }
+
+  return new Promise((resolve) => {
+    const input = document.getElementById(fallbackInputId);
+    input.value = '';
+    input.onchange = () => {
+      const file = input.files && input.files[0];
+      resolve(file ? { file, handle: null } : null);
+    };
+    input.click();
+  });
+}
+
+const MEDIAVOTE_HANDLE_DB = 'kyomei-mediavote';
+const MEDIAVOTE_HANDLE_STORE = 'handles';
+
+function openHandleDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(MEDIAVOTE_HANDLE_DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(MEDIAVOTE_HANDLE_STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// Persistence is a nice-to-have — a failure here just means no "resume
+// clip?" prompt next load, not a broken picker, so failures are swallowed.
+async function saveFileHandle(key, handle) {
+  try {
+    const db = await openHandleDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(MEDIAVOTE_HANDLE_STORE, 'readwrite');
+      tx.objectStore(MEDIAVOTE_HANDLE_STORE).put(handle, key);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {
+    console.warn('Could not persist file handle', e);
+  }
+}
+
+async function loadFileHandle(key) {
+  try {
+    const db = await openHandleDb();
+    return await new Promise((resolve, reject) => {
+      const req = db.transaction(MEDIAVOTE_HANDLE_STORE, 'readonly').objectStore(MEDIAVOTE_HANDLE_STORE).get(key);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch (e) {
+    return null;
+  }
+}
+
+async function verifyFileHandlePermission(handle) {
+  const opts = { mode: 'read' };
+  if ((await handle.queryPermission(opts)) === 'granted') return true;
+  if ((await handle.requestPermission(opts)) === 'granted') return true;
+  return false;
+}
+
+// Best-effort autoplay/audio unlock. 'play' arrives as a remote command,
+// not a direct click on this device, which risks browsers silently
+// blocking audio under autoplay policy. Playing then immediately pausing
+// right after a genuine local gesture (picking the file) typically
+// satisfies the "user has interacted with media on this page" heuristic
+// for the rest of the page's lifetime in Chrome/Firefox — not a
+// guarantee, needs testing on the actual room machine.
+async function unlockAutoplay(video) {
+  try {
+    await video.play();
+    video.pause();
+    video.currentTime = 0;
+  } catch (e) {
+    // Some browsers may still block this — nothing more to do here
+    // without a direct gesture on the video element itself.
+  }
+}
+
+// ---------------- Media Vote: session-driven display ----------------
+let mediaVoteHandleKey = null;
+let mediaVoteObjectUrl = null;
+let mediaTransportAppliedSeq = null;
+
+async function loadMediaVoteFile(file) {
+  const video = document.getElementById('mediavote-video');
+  if (mediaVoteObjectUrl) URL.revokeObjectURL(mediaVoteObjectUrl);
+  mediaVoteObjectUrl = URL.createObjectURL(file);
+  video.src = mediaVoteObjectUrl;
+
+  document.getElementById('mediavote-filepicker').classList.add('hidden');
+  video.classList.remove('hidden');
+
+  await unlockAutoplay(video);
+
+  // A transport command may already have been issued before this device
+  // loaded (or reloaded) the page — apply the current known state now
+  // that there's finally a clip to apply it to.
+  mediaTransportAppliedSeq = null;
+  if (currentSession) applyTransportCommand(currentSession);
+}
+
+async function initMediaVoteDisplay(session) {
+  showScreen('mediavote-display-screen');
+  document.getElementById('mediavote-filepicker').classList.remove('hidden');
+  document.getElementById('mediavote-video').classList.add('hidden');
+  const resumeBtn = document.getElementById('mediavote-resume-btn');
+  resumeBtn.classList.add('hidden');
+
+  mediaVoteHandleKey = `kyomei_mediavote_handle_${session.session_code}`;
+  mediaTransportAppliedSeq = null;
+
+  if (window.showOpenFilePicker) {
+    const savedHandle = await loadFileHandle(mediaVoteHandleKey);
+    if (savedHandle) {
+      resumeBtn.textContent = `Resume ${savedHandle.name}?`;
+      resumeBtn.classList.remove('hidden');
+      resumeBtn.onclick = async () => {
+        const ok = await verifyFileHandlePermission(savedHandle);
+        if (!ok) {
+          resumeBtn.classList.add('hidden');
+          return;
+        }
+        const file = await savedHandle.getFile();
+        await loadMediaVoteFile(file);
+      };
+    }
+  }
+
+  document.getElementById('mediavote-pick-btn').onclick = async () => {
+    const result = await pickVideoFile('mediavote-file-fallback');
+    if (!result) return;
+    if (result.handle) await saveFileHandle(mediaVoteHandleKey, result.handle);
+    await loadMediaVoteFile(result.file);
+  };
+
+  setupSessionsSubscription();
+}
+
+// 'play': position + elapsed real time since issued_at (broadcast/
+// processing latency adjustment). 'pause': pause and snap to the given
+// position. 'seek': snap to the given position without touching play/
+// pause state. Dispatched off media_transport_seq incrementing, not by
+// comparing action/position alone — two different commands can otherwise
+// look identical (e.g. two 'seek 0' restarts in a row).
+function applyTransportCommand(sessionRow) {
+  const video = document.getElementById('mediavote-video');
+  if (!video || !video.src) return; // no clip loaded yet — nothing to drive
+
+  const seq = sessionRow.media_transport_seq || 0;
+  if (seq === mediaTransportAppliedSeq) return;
+  mediaTransportAppliedSeq = seq;
+
+  const action = sessionRow.media_transport_action;
+  const positionMs = sessionRow.media_transport_position_ms || 0;
+
+  if (action === 'play') {
+    const issuedAtMs = sessionRow.media_transport_issued_at
+      ? new Date(sessionRow.media_transport_issued_at).getTime()
+      : Date.now();
+    const elapsedSeconds = Math.max(0, (Date.now() - issuedAtMs) / 1000);
+    video.currentTime = (positionMs / 1000) + elapsedSeconds;
+    video.play().catch(() => {});
+  } else if (action === 'pause') {
+    video.pause();
+    video.currentTime = positionMs / 1000;
+  } else if (action === 'seek') {
+    video.currentTime = positionMs / 1000;
+  }
+}
+
+// ---------------- Standalone playback test mode ----------------
+// Entirely local, no Supabase interaction, no session required — lets the
+// tutor verify a room's playback/audio setup without spinning up a real
+// session. Reuses the same picker (FSA-API-with-fallback) as the
+// session-driven flow above, just wired to its own overlay/video.
+let videoTestObjectUrl = null;
+
+document.getElementById('idle-test-video-btn').addEventListener('click', () => {
+  document.getElementById('video-test-picker').classList.remove('hidden');
+  document.getElementById('video-test-el').classList.add('hidden');
+  document.getElementById('video-test-overlay').classList.remove('hidden');
+});
+
+document.getElementById('video-test-pick-btn').addEventListener('click', async () => {
+  const result = await pickVideoFile('video-test-file-fallback');
+  if (!result) return;
+
+  const video = document.getElementById('video-test-el');
+  if (videoTestObjectUrl) URL.revokeObjectURL(videoTestObjectUrl);
+  videoTestObjectUrl = URL.createObjectURL(result.file);
+  video.src = videoTestObjectUrl;
+
+  document.getElementById('video-test-picker').classList.add('hidden');
+  video.classList.remove('hidden');
+
+  await unlockAutoplay(video);
+  video.play().catch(() => {});
+});
+
+document.getElementById('video-test-close-btn').addEventListener('click', () => {
+  const video = document.getElementById('video-test-el');
+  video.pause();
+  video.src = '';
+  if (videoTestObjectUrl) {
+    URL.revokeObjectURL(videoTestObjectUrl);
+    videoTestObjectUrl = null;
+  }
+  document.getElementById('video-test-overlay').classList.add('hidden');
+});
+
 // ---------------- Sessions subscription (guided category switches + reveal flips) ----------------
 let sessionsChannel = null;
 let sessionsReconnectTimer = null;
@@ -1762,6 +2049,12 @@ function setupSessionsSubscription() {
         if (promptChanged || revealChanged) {
           await renderTextMarkupDisplayState();
         }
+      } else if (displayMode === 'mediavote') {
+        currentSession.media_transport_action = payload.new.media_transport_action;
+        currentSession.media_transport_position_ms = payload.new.media_transport_position_ms;
+        currentSession.media_transport_issued_at = payload.new.media_transport_issued_at;
+        currentSession.media_transport_seq = payload.new.media_transport_seq;
+        applyTransportCommand(currentSession);
       }
     })
     .subscribe((status) => {

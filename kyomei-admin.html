@@ -325,6 +325,15 @@
   /* ---- Quick-tap heading ---- */
   .quicktap-heading-display { font-size: 22px; font-weight: 800; margin-bottom: 16px; }
 
+  /* ---- Media Vote transport + count ---- */
+  .mediavote-transport-row { display: flex; gap: 12px; margin-bottom: 16px; }
+  .mediavote-seek-row { display: flex; align-items: center; gap: 10px; }
+  .mediavote-seek-row label { font-size: 14px; color: var(--muted); }
+  .mediavote-seek-row input { max-width: 100px; }
+  .mediavote-count-panel { text-align: center; }
+  .mediavote-count-label { color: var(--muted); font-size: 14px; margin-bottom: 4px; }
+  .mediavote-count-value { font-size: 40px; font-weight: 800; }
+
   /* ---- Session view ---- */
   .session-header {
     display: flex;
@@ -507,6 +516,7 @@
             <button type="button" class="active" id="mode-text-btn">Text response</button>
             <button type="button" id="mode-quicktap-btn">Quick-tap buttons</button>
             <button type="button" id="mode-textmarkup-btn">Text markup</button>
+            <button type="button" id="mode-mediavote-btn">Media Vote</button>
           </div>
         </div>
         <div class="field" id="categories-field">
@@ -526,11 +536,13 @@
           </label>
         </div>
         <div class="field hidden" id="quicktap-field">
-          <label for="new-quicktap-heading">Heading / question</label>
-          <input id="new-quicktap-heading" type="text" placeholder="e.g. Which shot is it?">
-          <div id="quicktap-heading-error" class="field-error hidden"></div>
+          <div id="quicktap-heading-group">
+            <label for="new-quicktap-heading">Heading / question</label>
+            <input id="new-quicktap-heading" type="text" placeholder="e.g. Which shot is it?">
+            <div id="quicktap-heading-error" class="field-error hidden"></div>
+          </div>
 
-          <label class="field-subheading">Quick-tap options (2–10)</label>
+          <label class="field-subheading" id="quicktap-options-label">Quick-tap options (2–10)</label>
           <div class="category-list" id="new-quicktap-list"></div>
           <div class="muted color-picker-label">Color for next button</div>
           <div class="color-picker" id="quicktap-color-picker"></div>
@@ -539,13 +551,15 @@
             <button class="ghost" id="add-quicktap-btn">+ Add</button>
           </div>
           <div class="muted quicktap-hint">Up to 10 — shown as a button grid on the student's phone (a compact numbered strip past 6 options). Tapping one submits instantly.</div>
-          <label class="switch-row">
-            <span class="switch">
-              <input type="checkbox" id="new-one-vote-checkbox" role="switch">
-              <span class="switch-track" aria-hidden="true"></span>
-            </span>
-            <span>Limit to one vote per device</span>
-          </label>
+          <div id="quicktap-one-vote-group">
+            <label class="switch-row">
+              <span class="switch">
+                <input type="checkbox" id="new-one-vote-checkbox" role="switch">
+                <span class="switch-track" aria-hidden="true"></span>
+              </span>
+              <span>Limit to one vote per device</span>
+            </label>
+          </div>
           <div id="quicktap-error" class="field-error hidden"></div>
         </div>
         <div class="field hidden" id="textmarkup-field">
@@ -593,6 +607,25 @@
 
       <div id="textmarkup-prompt-picker" class="category-picker-row hidden"></div>
       <div id="textmarkup-waiting-status" class="hidden-status hidden">Pick a prompt above to reveal it to students</div>
+
+      <div id="mediavote-panel" class="hidden">
+        <div class="panel mediavote-transport">
+          <div class="mediavote-transport-row">
+            <button class="primary" type="button" id="media-playpause-btn">Play</button>
+            <button class="ghost" type="button" id="media-restart-btn">Restart</button>
+          </div>
+          <div class="mediavote-seek-row">
+            <label for="media-seek-input">Seek to (mm:ss)</label>
+            <input type="text" id="media-seek-input" placeholder="0:00" inputmode="numeric" autocomplete="off">
+            <button class="ghost" type="button" id="media-seek-btn">Seek</button>
+          </div>
+          <div id="media-seek-error" class="field-error hidden"></div>
+        </div>
+        <div class="panel mediavote-count-panel">
+          <div class="mediavote-count-label">Votes collected</div>
+          <div class="mediavote-count-value" id="mediavote-count-value">0</div>
+        </div>
+      </div>
 
       <h2 id="results-heading">Live feed</h2>
       <div id="feed-view-mode-indicator" class="feed-view-mode-indicator hidden">Grouped by category (press G to toggle)</div>
@@ -719,6 +752,7 @@ function showListScreen() {
   teardownFeedSubscription();
   teardownTallySubscription();
   teardownTextMarkupSubscription();
+  teardownMediaVoteSubscription();
   document.getElementById('connection-banner').classList.add('hidden');
   guidedCategories = [];
   activeCategoryId = null;
@@ -1017,14 +1051,24 @@ function setNewSessionMode(mode) {
   document.getElementById('mode-text-btn').classList.toggle('active', mode === 'text');
   document.getElementById('mode-quicktap-btn').classList.toggle('active', mode === 'quicktap');
   document.getElementById('mode-textmarkup-btn').classList.toggle('active', mode === 'textmarkup');
+  document.getElementById('mode-mediavote-btn').classList.toggle('active', mode === 'mediavote');
   document.getElementById('categories-field').classList.toggle('hidden', mode !== 'text');
-  document.getElementById('quicktap-field').classList.toggle('hidden', mode !== 'quicktap');
+  // Media Vote reuses this exact field — same options list, same add/
+  // remove/colour component, writing to the same quick_tap_options table —
+  // just without the heading or one-vote-per-device toggle (continuous
+  // re-tapping is the whole mechanic, not optional).
+  document.getElementById('quicktap-field').classList.toggle('hidden', mode !== 'quicktap' && mode !== 'mediavote');
+  document.getElementById('quicktap-heading-group').classList.toggle('hidden', mode === 'mediavote');
+  document.getElementById('quicktap-one-vote-group').classList.toggle('hidden', mode === 'mediavote');
+  document.getElementById('quicktap-options-label').textContent =
+    mode === 'mediavote' ? 'Vote options (2–10)' : 'Quick-tap options (2–10)';
   document.getElementById('textmarkup-field').classList.toggle('hidden', mode !== 'textmarkup');
 }
 
 document.getElementById('mode-text-btn').addEventListener('click', () => setNewSessionMode('text'));
 document.getElementById('mode-quicktap-btn').addEventListener('click', () => setNewSessionMode('quicktap'));
 document.getElementById('mode-textmarkup-btn').addEventListener('click', () => setNewSessionMode('textmarkup'));
+document.getElementById('mode-mediavote-btn').addEventListener('click', () => setNewSessionMode('mediavote'));
 
 function resetNewSessionForm() {
   document.getElementById('new-session-name').value = '';
@@ -1284,6 +1328,15 @@ document.getElementById('create-session-btn').addEventListener('click', async ()
     } else {
       quicktapError.classList.add('hidden');
     }
+  } else if (newSessionMode === 'mediavote') {
+    // No heading requirement — Media Vote has no heading field at all.
+    if (newQuickTapOptions.length < 2) {
+      quicktapError.textContent = 'Add at least 2 options.';
+      quicktapError.classList.remove('hidden');
+      hasError = true;
+    } else {
+      quicktapError.classList.add('hidden');
+    }
   } else if (newSessionMode === 'textmarkup') {
     if (!textmarkupPassage) {
       textmarkupPassageError.textContent = 'Add the passage text.';
@@ -1319,7 +1372,8 @@ document.getElementById('create-session-btn').addEventListener('click', async ()
       guided_categories: newSessionMode === 'text' && guidedEnabled,
       quick_tap_heading: newSessionMode === 'quicktap' ? quicktapHeading : null,
       text_markup_enabled: newSessionMode === 'textmarkup',
-      passage_text: newSessionMode === 'textmarkup' ? textmarkupPassage : null
+      passage_text: newSessionMode === 'textmarkup' ? textmarkupPassage : null,
+      media_vote_enabled: newSessionMode === 'mediavote'
     })
     .select()
     .single();
@@ -1829,6 +1883,210 @@ function teardownTextMarkupSubscription() {
   }
 }
 
+// ---------------- Media Vote mode ----------------
+// Transport is command-based, not a live scrub position: admin has no
+// video element of its own (the tutor watches the room's display), so
+// there's nothing to track playback position against in real time. Every
+// control just remembers the last position it itself set and replays that
+// — see the build note on Play/Pause below for the one place this shows.
+let mediaVoteIsPlaying = false;
+let mediaVoteCount = 0;
+let mediaVoteChannel = null;
+let mediaVoteReconnectTimer = null;
+
+function parseMmSsToMs(str) {
+  const match = (str || '').trim().match(/^(\d+):([0-5]?\d)$/);
+  if (!match) return null;
+  const minutes = parseInt(match[1], 10);
+  const seconds = parseInt(match[2], 10);
+  return (minutes * 60 + seconds) * 1000;
+}
+
+function formatMsToMmSs(ms) {
+  const totalSeconds = Math.max(0, Math.round((ms || 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function updateMediaTransportUI() {
+  const btn = document.getElementById('media-playpause-btn');
+  if (btn) btn.textContent = mediaVoteIsPlaying ? 'Pause' : 'Play';
+  const seekInput = document.getElementById('media-seek-input');
+  // Don't stomp on what the tutor is mid-typing in the seek box.
+  if (seekInput && document.activeElement !== seekInput) {
+    seekInput.value = formatMsToMmSs(currentSession ? currentSession.media_transport_position_ms : 0);
+  }
+}
+
+// Writes the live broadcast state (sessions.media_transport_*) and logs a
+// permanent record of the command (media_transport_events) — see the
+// schema notes on why these are two separate things. Returns whether the
+// broadcast write succeeded (event-logging failure is surfaced but doesn't
+// roll back an already-live command).
+async function sendTransportCommand(action, positionMs) {
+  if (!currentSession) return false;
+
+  const previous = {
+    action: currentSession.media_transport_action,
+    position: currentSession.media_transport_position_ms,
+    issuedAt: currentSession.media_transport_issued_at,
+    seq: currentSession.media_transport_seq
+  };
+  const issuedAt = new Date().toISOString();
+  const nextSeq = (currentSession.media_transport_seq || 0) + 1;
+
+  currentSession.media_transport_action = action;
+  currentSession.media_transport_position_ms = positionMs;
+  currentSession.media_transport_issued_at = issuedAt;
+  currentSession.media_transport_seq = nextSeq;
+  updateMediaTransportUI();
+
+  const { error: sessError } = await supabaseClient
+    .from('sessions')
+    .update({
+      media_transport_action: action,
+      media_transport_position_ms: positionMs,
+      media_transport_issued_at: issuedAt,
+      media_transport_seq: nextSeq
+    })
+    .eq('id', currentSession.id);
+
+  if (sessError) {
+    currentSession.media_transport_action = previous.action;
+    currentSession.media_transport_position_ms = previous.position;
+    currentSession.media_transport_issued_at = previous.issuedAt;
+    currentSession.media_transport_seq = previous.seq;
+    updateMediaTransportUI();
+    handleQueryError(sessError);
+    return false;
+  }
+
+  const { error: eventError } = await supabaseClient
+    .from('media_transport_events')
+    .insert({ session_id: currentSession.id, action, position_ms: positionMs });
+
+  if (eventError) {
+    showError('Transport command sent, but was not logged: ' + eventError.message);
+  }
+
+  return true;
+}
+
+document.getElementById('media-playpause-btn').addEventListener('click', async () => {
+  if (!currentSession) return;
+  const wasPlaying = mediaVoteIsPlaying;
+  const nextAction = wasPlaying ? 'pause' : 'play';
+  const positionMs = currentSession.media_transport_position_ms || 0;
+  mediaVoteIsPlaying = !wasPlaying;
+  updateMediaTransportUI();
+
+  const ok = await sendTransportCommand(nextAction, positionMs);
+  if (!ok) {
+    mediaVoteIsPlaying = wasPlaying;
+    updateMediaTransportUI();
+  }
+});
+
+document.getElementById('media-restart-btn').addEventListener('click', async () => {
+  if (!currentSession) return;
+  await sendTransportCommand('seek', 0);
+});
+
+async function submitMediaSeek() {
+  if (!currentSession) return;
+  const input = document.getElementById('media-seek-input');
+  const errorEl = document.getElementById('media-seek-error');
+  const ms = parseMmSsToMs(input.value);
+  if (ms === null) {
+    errorEl.textContent = 'Enter a time as mm:ss, e.g. 1:30.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  errorEl.classList.add('hidden');
+  await sendTransportCommand('seek', ms);
+}
+
+document.getElementById('media-seek-btn').addEventListener('click', submitMediaSeek);
+document.getElementById('media-seek-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    submitMediaSeek();
+  }
+});
+
+async function loadMediaVoteCount() {
+  if (!currentSession) return;
+  const { count, error } = await supabaseClient
+    .from('media_vote_responses')
+    .select('*', { count: 'exact', head: true })
+    .eq('session_id', currentSession.id);
+
+  if (error) {
+    handleQueryError(error);
+    return;
+  }
+
+  mediaVoteCount = count || 0;
+  updateMediaVoteCountUI();
+}
+
+function updateMediaVoteCountUI() {
+  const el = document.getElementById('mediavote-count-value');
+  if (el) el.textContent = String(mediaVoteCount);
+}
+
+function setupMediaVoteSubscription() {
+  teardownMediaVoteSubscription();
+
+  const channel = supabaseClient
+    .channel(`media_vote_responses_${currentSession.id}`)
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'media_vote_responses',
+      filter: `session_id=eq.${currentSession.id}`
+    }, () => {
+      mediaVoteCount += 1;
+      updateMediaVoteCountUI();
+    })
+    .subscribe((status) => {
+      // See setupFeedSubscription: ignore callbacks from a channel that's
+      // no longer the active one (removeChannel fires CLOSED on teardown).
+      if (mediaVoteChannel !== channel) return;
+      const banner = document.getElementById('connection-banner');
+      if (status === 'SUBSCRIBED') {
+        banner.classList.add('hidden');
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        banner.classList.remove('hidden');
+        scheduleMediaVoteReconnect();
+      }
+    });
+
+  mediaVoteChannel = channel;
+}
+
+function scheduleMediaVoteReconnect() {
+  if (mediaVoteReconnectTimer) return;
+  mediaVoteReconnectTimer = setTimeout(() => {
+    mediaVoteReconnectTimer = null;
+    if (currentSession && currentSession.media_vote_enabled && !screens.sessionView.classList.contains('hidden')) {
+      setupMediaVoteSubscription();
+    }
+  }, 3000);
+}
+
+function teardownMediaVoteSubscription() {
+  if (mediaVoteChannel) {
+    supabaseClient.removeChannel(mediaVoteChannel);
+    mediaVoteChannel = null;
+  }
+  if (mediaVoteReconnectTimer) {
+    clearTimeout(mediaVoteReconnectTimer);
+    mediaVoteReconnectTimer = null;
+  }
+}
+
 async function enterSession(session) {
   currentSession = session;
   document.getElementById('session-view-name').textContent = session.name;
@@ -1841,12 +2099,14 @@ async function enterSession(session) {
 
   const isQuickTap = !!session.quick_tap_enabled;
   const isTextMarkup = !isQuickTap && !!session.text_markup_enabled;
-  const isGuided = !isQuickTap && !isTextMarkup && !!session.guided_categories;
+  const isMediaVote = !isQuickTap && !isTextMarkup && !!session.media_vote_enabled;
+  const isGuided = !isQuickTap && !isTextMarkup && !isMediaVote && !!session.guided_categories;
 
   // feed_grouped only ever applies to plain (non-guided, non-quicktap,
-  // non-textmarkup) text-response sessions — text markup has no
-  // friction_pool-based feed at all, same restriction as the g-key guard.
-  const feedGroupedApplies = !isQuickTap && !isTextMarkup && !isGuided;
+  // non-textmarkup, non-mediavote) text-response sessions — text markup and
+  // media vote have no friction_pool-based feed at all, same restriction as
+  // the g-key guard.
+  const feedGroupedApplies = !isQuickTap && !isTextMarkup && !isMediaVote && !isGuided;
   feedViewMode = (feedGroupedApplies && session.feed_grouped) ? 'grouped' : 'chronological';
   plainFeedCategories = null;
   if (feedViewMode === 'grouped') {
@@ -1856,9 +2116,11 @@ async function enterSession(session) {
 
   document.getElementById('results-heading').textContent =
     isQuickTap ? 'Live results' : (isTextMarkup ? 'Text markup responses' : 'Live feed');
+  document.getElementById('results-heading').classList.toggle('hidden', isMediaVote);
   document.getElementById('quicktap-results-controls').classList.toggle('hidden', !(isQuickTap || isTextMarkup));
   document.getElementById('guided-category-picker').classList.toggle('hidden', !isGuided);
   document.getElementById('textmarkup-prompt-picker').classList.toggle('hidden', !isTextMarkup);
+  document.getElementById('mediavote-panel').classList.toggle('hidden', !isMediaVote);
 
   const headingEl = document.getElementById('quicktap-heading-display');
   if (isQuickTap && session.quick_tap_heading) {
@@ -1900,6 +2162,18 @@ async function enterSession(session) {
     updateRevealUI();
     await loadTextMarkupAggregate();
     setupTextMarkupSubscription();
+  } else if (isMediaVote) {
+    document.getElementById('feed').classList.add('hidden');
+    document.getElementById('feed-empty').classList.add('hidden');
+    document.getElementById('guided-waiting-status').classList.add('hidden');
+    document.getElementById('results-hidden-status').classList.add('hidden');
+    document.getElementById('tally-grid').classList.add('hidden');
+    document.getElementById('textmarkup-waiting-status').classList.add('hidden');
+
+    mediaVoteIsPlaying = session.media_transport_action === 'play';
+    updateMediaTransportUI();
+    await loadMediaVoteCount();
+    setupMediaVoteSubscription();
   } else {
     document.getElementById('results-hidden-status').classList.add('hidden');
     document.getElementById('tally-grid').classList.add('hidden');
@@ -1925,7 +2199,8 @@ function updateModeBadge() {
   const badge = document.getElementById('session-mode-badge');
   const isQuickTap = !!currentSession.quick_tap_enabled;
   const isTextMarkup = !isQuickTap && !!currentSession.text_markup_enabled;
-  const isGuided = !isQuickTap && !isTextMarkup && !!currentSession.guided_categories;
+  const isMediaVote = !isQuickTap && !isTextMarkup && !!currentSession.media_vote_enabled;
+  const isGuided = !isQuickTap && !isTextMarkup && !isMediaVote && !!currentSession.guided_categories;
 
   if (isQuickTap) {
     badge.textContent = currentSession.one_vote_per_device
@@ -1934,6 +2209,8 @@ function updateModeBadge() {
   } else if (isTextMarkup) {
     const n = textMarkupPrompts.length;
     badge.textContent = `Text markup · ${n} prompt${n === 1 ? '' : 's'}`;
+  } else if (isMediaVote) {
+    badge.textContent = 'Media vote';
   } else if (isGuided) {
     const n = guidedCategories.length;
     badge.textContent = `Guided · ${n} categor${n === 1 ? 'y' : 'ies'}`;
@@ -1960,6 +2237,8 @@ document.getElementById('refresh-session-btn').addEventListener('click', async (
     await loadQuickTapResults();
   } else if (currentSession.text_markup_enabled) {
     await loadTextMarkupAggregate();
+  } else if (currentSession.media_vote_enabled) {
+    await loadMediaVoteCount();
   } else {
     await loadInitialFeed();
   }
@@ -2005,12 +2284,38 @@ async function resetSessionResponses() {
     return;
   }
 
+  const { error: mvError } = await supabaseClient
+    .from('media_vote_responses')
+    .delete()
+    .eq('session_id', currentSession.id);
+
+  if (mvError) {
+    showError('Could not reset responses: ' + mvError.message);
+    return;
+  }
+
+  const { error: mtError } = await supabaseClient
+    .from('media_transport_events')
+    .delete()
+    .eq('session_id', currentSession.id);
+
+  if (mtError) {
+    showError('Could not reset responses: ' + mtError.message);
+    return;
+  }
+
   const updatePayload = { results_revealed: false };
   if (currentSession.guided_categories) {
     updatePayload.active_category_id = null;
   }
   if (currentSession.text_markup_enabled) {
     updatePayload.active_prompt_id = null;
+  }
+  if (currentSession.media_vote_enabled) {
+    updatePayload.media_transport_action = null;
+    updatePayload.media_transport_position_ms = null;
+    updatePayload.media_transport_issued_at = null;
+    updatePayload.media_transport_seq = 0;
   }
 
   const { error: sessError } = await supabaseClient
@@ -2029,6 +2334,12 @@ async function resetSessionResponses() {
   }
   if (currentSession.text_markup_enabled) {
     currentSession.active_prompt_id = null;
+  }
+  if (currentSession.media_vote_enabled) {
+    currentSession.media_transport_action = null;
+    currentSession.media_transport_position_ms = null;
+    currentSession.media_transport_issued_at = null;
+    currentSession.media_transport_seq = 0;
   }
 
   // Re-run the same load path used to enter the session in the first
@@ -2361,7 +2672,7 @@ document.addEventListener('keydown', (e) => {
   const tag = document.activeElement && document.activeElement.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA') return;
   if (!currentSession || screens.sessionView.classList.contains('hidden')) return;
-  const isPlainTextSession = !currentSession.quick_tap_enabled && !currentSession.guided_categories && !currentSession.text_markup_enabled;
+  const isPlainTextSession = !currentSession.quick_tap_enabled && !currentSession.guided_categories && !currentSession.text_markup_enabled && !currentSession.media_vote_enabled;
   if (!isPlainTextSession) return;
   e.preventDefault();
   toggleFeedViewMode();

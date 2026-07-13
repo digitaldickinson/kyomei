@@ -340,6 +340,18 @@
     <div id="voted-status" class="hidden-status hidden">You've already voted on this device. Thanks!</div>
   </div>
 
+  <div id="mediavote-screen" class="hidden">
+    <h1>kyomei</h1>
+    <div class="subtitle">Vote as the clip plays. Tap as many times as you like.</div>
+
+    <div class="session-name-header">Session: <strong id="mediavote-session-name-display"></strong></div>
+
+    <div id="mediavote-success-banner" class="status-banner ok hidden">Submitted! ✓</div>
+    <div id="mediavote-error-banner" class="status-banner error hidden"></div>
+
+    <div class="tap-grid" id="mediavote-tap-grid"></div>
+  </div>
+
 </div>
 
 <script>
@@ -370,7 +382,7 @@ let currentSession = null;
 let currentCategories = [];
 
 function showScreen(id) {
-  ['loading-screen', 'invalid-session-screen', 'form-screen', 'quicktap-screen', 'guided-screen', 'textmarkup-screen'].forEach(s => {
+  ['loading-screen', 'invalid-session-screen', 'form-screen', 'quicktap-screen', 'guided-screen', 'textmarkup-screen', 'mediavote-screen'].forEach(s => {
     document.getElementById(s).classList.toggle('hidden', s !== id);
   });
 }
@@ -401,6 +413,8 @@ async function init() {
     await initQuickTap(session);
   } else if (session.text_markup_enabled) {
     await initTextMarkup(session);
+  } else if (session.media_vote_enabled) {
+    await initMediaVote(session);
   } else {
     await initTextResponse(session);
   }
@@ -1093,6 +1107,69 @@ async function handleTap(optionId) {
   successBanner.classList.remove('hidden');
   if (tapSuccessTimer) clearTimeout(tapSuccessTimer);
   tapSuccessTimer = setTimeout(() => {
+    successBanner.classList.add('hidden');
+  }, 1500);
+}
+
+// ---------------- Media Vote ----------------
+// Button set reuses quick_tap_options directly (same shape, same table —
+// a session is either quick_tap_enabled or media_vote_enabled, never
+// both). Every tap is just an insert of (option, device, timestamp) — no
+// clip-position tracking of any kind happens on this device. Buttons stay
+// live and re-tappable throughout; there's no one-vote-per-device lock
+// for this mode.
+async function initMediaVote(session) {
+  const { data: options, error: optError } = await supabaseClient
+    .from('quick_tap_options')
+    .select('*')
+    .eq('session_id', session.id)
+    .order('sort_order', { ascending: true });
+
+  if (optError || !options || options.length === 0) {
+    showScreen('invalid-session-screen');
+    return;
+  }
+
+  document.getElementById('mediavote-session-name-display').textContent = session.name;
+
+  const grid = document.getElementById('mediavote-tap-grid');
+  grid.innerHTML = '';
+  const isCompact = options.length > 6;
+  grid.className = isCompact ? 'tap-grid-compact' : 'tap-grid';
+  for (const opt of options) {
+    const btn = document.createElement('button');
+    btn.className = isCompact ? 'tap-btn-compact' : 'tap-btn';
+    btn.type = 'button';
+    btn.textContent = opt.label;
+    btn.style.backgroundColor = opt.color || '#5b8cff';
+    btn.style.borderColor = opt.color || '#5b8cff';
+    btn.addEventListener('click', () => handleMediaVoteTap(opt.id));
+    grid.appendChild(btn);
+  }
+
+  showScreen('mediavote-screen');
+}
+
+let mediaVoteSuccessTimer = null;
+
+async function handleMediaVoteTap(optionId) {
+  const errorBanner = document.getElementById('mediavote-error-banner');
+  const successBanner = document.getElementById('mediavote-success-banner');
+  errorBanner.classList.add('hidden');
+
+  const { error } = await supabaseClient
+    .from('media_vote_responses')
+    .insert({ session_id: currentSession.id, option_id: optionId, device_id: deviceId });
+
+  if (error) {
+    errorBanner.textContent = 'Could not submit — check your connection and try again.';
+    errorBanner.classList.remove('hidden');
+    return;
+  }
+
+  successBanner.classList.remove('hidden');
+  if (mediaVoteSuccessTimer) clearTimeout(mediaVoteSuccessTimer);
+  mediaVoteSuccessTimer = setTimeout(() => {
     successBanner.classList.add('hidden');
   }, 1500);
 }
