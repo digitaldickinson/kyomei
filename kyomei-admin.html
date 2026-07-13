@@ -819,15 +819,24 @@ document.getElementById('send-link-btn').addEventListener('click', async () => {
 // (covering page load) and again on every subsequent sign-in/out/refresh —
 // this is the single source of truth for auth state, so there's no separate
 // getSession() call alongside it (that was firing showListScreen() twice).
+let hasSeenSession = false;
+
 supabaseClient.auth.onAuthStateChange((event, session) => {
   if (session) {
     showAuthed();
-    if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+    if (!hasSeenSession) {
+      hasSeenSession = true;
       showListScreen();
     }
-    // TOKEN_REFRESHED and other events: session is still valid, but don't
-    // disturb whatever view is currently open.
+    // Every subsequent call with a session present — regardless of what
+    // event name Supabase reports — must never disturb whatever view is
+    // currently open. This covers TOKEN_REFRESHED and any SIGNED_IN fired
+    // by tab-visibility session recovery (confirmed Supabase behavior: a
+    // long-backgrounded tab resurfacing can itself report SIGNED_IN, not
+    // just TOKEN_REFRESHED — event-name matching can't distinguish that
+    // from a genuine first sign-in).
   } else {
+    hasSeenSession = false;
     showLogin();
   }
 });
