@@ -44,6 +44,4 @@ channel subscriptions.
 
 ## Running locally
 
-These are static HTML files with no build step — serve the directory with
-any static file server and open `kyomei-admin.html` to create a session, or
-`kyomei.html` / `kyomei-display.html` with a session ID to join one.
+These are static HTML files with no build step. But you will need to run them from a sever that everyone can access. For example, use GitHub Pages or Netify drop -  https://app.netlify.com/drop 
