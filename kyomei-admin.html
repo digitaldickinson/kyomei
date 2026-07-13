@@ -1925,6 +1925,25 @@ function updateMediaTransportUI() {
   }
 }
 
+// media_transport_position_ms only ever holds wherever the *last* command
+// was issued from — it doesn't advance while the clip plays (no live
+// position tracking, by design). Pausing needs the actual current
+// position, not that stale value, or it snaps the clip back to wherever
+// Play last started from and silently discards all progress made since.
+// Same elapsed-time-since-issued math the display already uses to adjust
+// 'play' — applied here instead so Pause captures a good estimate of
+// where playback actually is.
+function estimateCurrentPositionMs() {
+  if (!currentSession) return 0;
+  const basePosition = currentSession.media_transport_position_ms || 0;
+  if (currentSession.media_transport_action === 'play' && currentSession.media_transport_issued_at) {
+    const issuedAtMs = new Date(currentSession.media_transport_issued_at).getTime();
+    const elapsedMs = Math.max(0, Date.now() - issuedAtMs);
+    return basePosition + elapsedMs;
+  }
+  return basePosition;
+}
+
 // Writes the live broadcast state (sessions.media_transport_*) and logs a
 // permanent record of the command (media_transport_events) — see the
 // schema notes on why these are two separate things. Returns whether the
@@ -1983,7 +2002,7 @@ document.getElementById('media-playpause-btn').addEventListener('click', async (
   if (!currentSession) return;
   const wasPlaying = mediaVoteIsPlaying;
   const nextAction = wasPlaying ? 'pause' : 'play';
-  const positionMs = currentSession.media_transport_position_ms || 0;
+  const positionMs = wasPlaying ? estimateCurrentPositionMs() : (currentSession.media_transport_position_ms || 0);
   mediaVoteIsPlaying = !wasPlaying;
   updateMediaTransportUI();
 
