@@ -8,11 +8,14 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. `friction_pool_schema.sql` is not tracked in git, so any entry that changed the schema is flagged (**schema**) as a reminder to re-run it against Supabase.
 
-**Current version: 1.7.1**
+**Current version: 1.7.2**
 
 ---
 
 ## Log
+
+### 1.7.2 — 2026-07-13
+Fixed a Text Markup display bug: revealing results then hiding them again left the previously-rendered heatmap/community view visible underneath the "Collecting responses…" status, because `applyTextMarkupChartTypeVisibility()` in kyomei-display.html only gated visibility on the selected chart type, not on `resultsRevealed`. Admin didn't have this bug — its equivalent containers sit inside a parent that's hidden directly on toggle.
 
 ### 1.7.1 — 2026-07-13 — **schema**
 Fixed a 401 on every Text Markup submit. The client-side `upsert()` (on_conflict + merge-duplicates) requires anon to have SELECT visibility into the row it might conflict with, but the only anon SELECT policy on `text_markup_responses` is gated by `results_revealed` — so submits 401'd (42501) throughout normal collection, before any reveal. Replaced with a `submit_text_markup_response` security-definer RPC (same pattern as `get_own_text_markup_response`) that does the upsert server-side, bypassing the anon SELECT restriction without widening it.

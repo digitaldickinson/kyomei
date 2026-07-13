@@ -1779,9 +1779,12 @@ function updateTextMarkupTotalCount() {
 
 function applyTextMarkupChartTypeVisibility() {
   const isComparing = !!textMarkupComparePromptId;
-  document.getElementById('textmarkup-display-heatmap-view').classList.toggle('hidden', textMarkupChartType !== 'heatmap' || isComparing);
-  document.getElementById('textmarkup-display-compare-view').classList.toggle('hidden', textMarkupChartType !== 'heatmap' || !isComparing);
-  document.getElementById('textmarkup-display-community-view').classList.toggle('hidden', textMarkupChartType !== 'community');
+  // resultsRevealed gates all three regardless of chart type — otherwise
+  // hiding results after a reveal leaves whichever view was already
+  // rendered visible underneath the "Collecting responses…" status.
+  document.getElementById('textmarkup-display-heatmap-view').classList.toggle('hidden', !resultsRevealed || textMarkupChartType !== 'heatmap' || isComparing);
+  document.getElementById('textmarkup-display-compare-view').classList.toggle('hidden', !resultsRevealed || textMarkupChartType !== 'heatmap' || !isComparing);
+  document.getElementById('textmarkup-display-community-view').classList.toggle('hidden', !resultsRevealed || textMarkupChartType !== 'community');
 }
 
 // Same fix as applyQuickTapChartType() above — driven by
