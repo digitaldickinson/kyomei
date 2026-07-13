@@ -2019,6 +2019,19 @@ let mediaVoteObjectUrl = null;
 let mediaTransportAppliedSeq = null;
 let activeMediaAdapter = null; // set once whichever player (local <video> or Kaltura) is ready
 
+// First reverse-direction broadcast in the app — display telling admin
+// something, rather than admin broadcasting to display. Best-effort: a
+// failure here just means admin's readiness label lags reality, not a
+// broken load, so it's not surfaced as a user-facing error.
+async function setMediaPlayerReady(ready) {
+  if (!currentSession) return;
+  const { error } = await supabaseClient.rpc('set_media_player_ready', {
+    p_session_id: currentSession.id,
+    p_ready: ready
+  });
+  if (error) console.warn('Could not update media player ready state', error);
+}
+
 async function loadMediaVoteFile(file) {
   const video = document.getElementById('mediavote-video');
   if (mediaVoteObjectUrl) URL.revokeObjectURL(mediaVoteObjectUrl);
@@ -2031,6 +2044,7 @@ async function loadMediaVoteFile(file) {
   await unlockAutoplay(video);
 
   activeMediaAdapter = makeVideoAdapter(video);
+  await setMediaPlayerReady(true);
 
   // A transport command may already have been issued before this device
   // loaded (or reloaded) the page — apply the current known state now
@@ -2085,6 +2099,7 @@ async function loadMediaVoteKaltura(entryId) {
     }
 
     activeMediaAdapter = makeKalturaAdapter(player);
+    await setMediaPlayerReady(true);
     mediaTransportAppliedSeq = null;
     if (currentSession) applyTransportCommand(currentSession);
   } catch (e) {
@@ -2264,6 +2279,7 @@ async function initMediaVoteDisplay(session) {
   showScreen('mediavote-display-screen');
   hideMediaVoteError();
   activeMediaAdapter = null;
+  await setMediaPlayerReady(false);
   mediaTransportAppliedSeq = null;
   mediaVoteSourceType = session.media_source_type === 'mmutube' ? 'mmutube' : 'local';
   resultsRevealed = !!session.results_revealed;

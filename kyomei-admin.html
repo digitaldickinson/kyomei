@@ -328,7 +328,12 @@
   .quicktap-heading-display { font-size: 22px; font-weight: 800; margin-bottom: 16px; }
 
   /* ---- Media Vote transport + count ---- */
+  .mediavote-player-status { font-size: 13px; font-weight: 700; margin-bottom: 12px; }
+  .mediavote-player-status.ready { color: var(--ok); }
+  .mediavote-player-status.waiting { color: var(--warning); }
   .mediavote-transport-row { display: flex; gap: 12px; margin-bottom: 16px; }
+  .mediavote-transport-row.player-not-ready,
+  .mediavote-seek-row.player-not-ready { opacity: 0.5; }
   .mediavote-seek-row { display: flex; align-items: center; gap: 10px; }
   .mediavote-seek-row label { font-size: 14px; color: var(--muted); }
   .mediavote-seek-row input { max-width: 100px; }
@@ -655,6 +660,7 @@
 
       <div id="mediavote-panel" class="hidden">
         <div class="panel mediavote-transport">
+          <div id="mediavote-player-status" class="mediavote-player-status waiting">Display: waiting for video to load</div>
           <div class="mediavote-transport-row">
             <button class="ok" type="button" id="media-playpause-btn">Play</button>
             <button class="ghost" type="button" id="media-restart-btn">Restart</button>
@@ -817,6 +823,7 @@ function showListScreen() {
   teardownTallySubscription();
   teardownTextMarkupSubscription();
   teardownMediaVoteSubscription();
+  teardownMediaSessionRowSubscription();
   stopMediaVotePositionTicker();
   document.getElementById('connection-banner').classList.add('hidden');
   guidedCategories = [];
@@ -2024,6 +2031,86 @@ let mediaVoteIsPlaying = false;
 let mediaVoteCount = 0;
 let mediaVoteChannel = null;
 let mediaVoteReconnectTimer = null;
+let mediaPlayerReady = false;
+let mediaSessionRowChannel = null;
+let mediaSessionRowReconnectTimer = null;
+
+function updateMediaPlayerReadyUI() {
+  const statusEl = document.getElementById('mediavote-player-status');
+  if (statusEl) {
+    statusEl.textContent = mediaPlayerReady ? 'Display: ready' : 'Display: waiting for video to load';
+    statusEl.classList.toggle('ready', mediaPlayerReady);
+    statusEl.classList.toggle('waiting', !mediaPlayerReady);
+  }
+  // Not a hard block — a status label alone signals "before clicking",
+  // this dimming just reinforces it, since a command sent while not ready
+  // still fails silently on display's end (nothing to apply it to yet).
+  const transportRow = document.querySelector('.mediavote-transport-row');
+  const seekRow = document.querySelector('.mediavote-seek-row');
+  if (transportRow) transportRow.classList.toggle('player-not-ready', !mediaPlayerReady);
+  if (seekRow) seekRow.classList.toggle('player-not-ready', !mediaPlayerReady);
+}
+
+// This is the first sessions-row subscription in admin — every other
+// admin subscription listens to a response table (feed/tally/text-markup/
+// media-vote-responses), since admin is normally the one writing to
+// sessions, not reading its own writes back. media_player_ready is the
+// first reverse-direction signal (display writing, admin reading), so a
+// new channel is needed here rather than piggybacking on an existing one.
+function setupMediaSessionRowSubscription() {
+  teardownMediaSessionRowSubscription();
+
+  const channel = supabaseClient
+    .channel(`media_session_row_${currentSession.id}`)
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'sessions',
+      filter: `id=eq.${currentSession.id}`
+    }, (payload) => {
+      const newReady = !!payload.new.media_player_ready;
+      if (newReady !== mediaPlayerReady) {
+        mediaPlayerReady = newReady;
+        currentSession.media_player_ready = newReady;
+        updateMediaPlayerReadyUI();
+      }
+    })
+    .subscribe((status) => {
+      // See setupFeedSubscription: ignore callbacks from a channel that's
+      // no longer the active one (removeChannel fires CLOSED on teardown).
+      if (mediaSessionRowChannel !== channel) return;
+      const banner = document.getElementById('connection-banner');
+      if (status === 'SUBSCRIBED') {
+        banner.classList.add('hidden');
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        banner.classList.remove('hidden');
+        scheduleMediaSessionRowReconnect();
+      }
+    });
+
+  mediaSessionRowChannel = channel;
+}
+
+function scheduleMediaSessionRowReconnect() {
+  if (mediaSessionRowReconnectTimer) return;
+  mediaSessionRowReconnectTimer = setTimeout(() => {
+    mediaSessionRowReconnectTimer = null;
+    if (currentSession && currentSession.media_vote_enabled && !screens.sessionView.classList.contains('hidden')) {
+      setupMediaSessionRowSubscription();
+    }
+  }, 3000);
+}
+
+function teardownMediaSessionRowSubscription() {
+  if (mediaSessionRowChannel) {
+    supabaseClient.removeChannel(mediaSessionRowChannel);
+    mediaSessionRowChannel = null;
+  }
+  if (mediaSessionRowReconnectTimer) {
+    clearTimeout(mediaSessionRowReconnectTimer);
+    mediaSessionRowReconnectTimer = null;
+  }
+}
 
 function parseMmSsToMs(str) {
   const match = (str || '').trim().match(/^(\d+):([0-5]?\d)$/);
@@ -2607,6 +2694,10 @@ async function enterSession(session) {
     startMediaVotePositionTicker();
     await loadMediaVoteCount();
     setupMediaVoteSubscription();
+
+    mediaPlayerReady = !!session.media_player_ready;
+    updateMediaPlayerReadyUI();
+    setupMediaSessionRowSubscription();
 
     mediaTimelineBucketSeconds = session.media_timeline_bucket_seconds || 5;
     renderMediaVoteBucketToggle();
