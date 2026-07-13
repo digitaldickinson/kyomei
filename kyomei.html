@@ -1016,15 +1016,18 @@ document.getElementById('textmarkup-submit-btn').addEventListener('click', async
   btn.disabled = true;
   btn.textContent = 'Submitting…';
 
-  const { error } = await supabaseClient
-    .from('text_markup_responses')
-    .upsert({
-      session_id: currentSession.id,
-      prompt_id: textMarkupActivePromptId,
-      device_id: deviceId,
-      spans: currentRanges,
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'session_id,prompt_id,device_id' });
+  // Goes through a security-definer RPC rather than a direct client upsert —
+  // PostgREST's on_conflict/merge-duplicates path requires the anon role to
+  // be able to SELECT the row it might conflict with (even when no conflict
+  // exists yet), and the only anon SELECT policy on this table is gated by
+  // results_revealed. A direct upsert 401s (42501) on every submit before
+  // reveal. Same pattern as get_own_text_markup_response above.
+  const { error } = await supabaseClient.rpc('submit_text_markup_response', {
+    p_session_id: currentSession.id,
+    p_prompt_id: textMarkupActivePromptId,
+    p_device_id: deviceId,
+    p_spans: currentRanges
+  });
 
   btn.disabled = false;
   btn.textContent = 'Submit';

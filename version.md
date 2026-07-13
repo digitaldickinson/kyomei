@@ -8,11 +8,14 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. `friction_pool_schema.sql` is not tracked in git, so any entry that changed the schema is flagged (**schema**) as a reminder to re-run it against Supabase.
 
-**Current version: 1.7.0**
+**Current version: 1.7.1**
 
 ---
 
 ## Log
+
+### 1.7.1 — 2026-07-13 — **schema**
+Fixed a 401 on every Text Markup submit. The client-side `upsert()` (on_conflict + merge-duplicates) requires anon to have SELECT visibility into the row it might conflict with, but the only anon SELECT policy on `text_markup_responses` is gated by `results_revealed` — so submits 401'd (42501) throughout normal collection, before any reveal. Replaced with a `submit_text_markup_response` security-definer RPC (same pattern as `get_own_text_markup_response`) that does the upsert server-side, bypassing the anon SELECT restriction without widening it.
 
 ### 1.7.0 — 2026-07-13 — **schema**
 Text Markup: two independent aggregate-view improvements. (1) Non-linear (square-root) heatmap intensity scaling, applied identically in admin and display, so a single runaway-popular phrase no longer flattens every other word's relative intensity — secondary structure among more modest highlights stays visible. (2) Cross-prompt comparison view — a broadcast "Compare with…" control in admin (reveal-gated, like every other aggregate view) shows two prompts' heatmaps side by side on the display, reusing the exact same heatmap render function called twice rather than a second implementation. Scoped to heatmap only — community-highlight's ranked list is unaffected, still sorted by raw peak count.
