@@ -14,6 +14,26 @@ a display view projects live results for the room.
 - **`kyomei-display.html`** — read-only display view for projecting live
   session results.
 
+## Session types
+
+Every session is exactly one of these, set at creation:
+
+- **Text response** — students submit free-text scenarios against
+  tutor-defined categories. Optionally **guided**, where the tutor reveals
+  one category at a time instead of all at once.
+- **Quick-tap buttons** — students tap one of up to 10 tutor-defined
+  buttons; instant-submit, optionally limited to one vote per device.
+  Includes two one-click "Pulse Check" launcher variants (traffic light,
+  confidence) with their own dedicated single-view displays.
+- **Text markup** — students highlight word ranges in a fixed passage in
+  response to tutor-set prompts; aggregate views show a heatmap and
+  community highlights across the room's highlights.
+- **Media Vote** — a clip (a local file, or an embedded mmutube video)
+  plays on the display, driven by Play/Pause/Seek/Restart transport
+  controls in admin; students vote on a fixed button set as it plays,
+  retapping freely. A reveal-gated timeline reconstructs how the room's
+  vote evolved across the clip, bucketed at a tutor-adjustable interval.
+
 ## Backend
 
 Data is stored in [Supabase](https://supabase.com) (via `@supabase/supabase-js`),
