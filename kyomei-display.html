@@ -546,6 +546,10 @@
     <button type="button" class="display-btn ghost hidden" id="mediavote-resume-btn"></button>
     <input type="file" id="mediavote-file-fallback" accept="video/*,audio/*" class="hidden">
   </div>
+  <div id="mediavote-kaltura-prompt" class="mediavote-filepicker hidden">
+    <div class="mediavote-filepicker-title">Load the video for this session</div>
+    <button type="button" class="display-btn" id="mediavote-kaltura-load-btn">Load mmutube video</button>
+  </div>
   <video id="mediavote-video" class="mediavote-video hidden" playsinline></video>
   <div id="mediavote-kaltura-container" class="mediavote-kaltura-container hidden"></div>
 </div>
@@ -1987,16 +1991,19 @@ async function loadMediaVoteFile(file) {
   if (currentSession) applyTransportCommand(currentSession);
 }
 
-// Kaltura's Dynamic Embed player is purpose-built for remote/programmatic
-// control, so it likely doesn't need the play()-then-pause() autoplay
-// unlock the raw <video> element needs — but that's unverified until
-// tested against a real embed with a remote 'play' command, so it's
-// deliberately not applied here. If audio doesn't play on a remote play
-// command in testing, apply the same unlockAutoplay() mitigation here.
+// Requires a prior local click (wired in initMediaVoteDisplay's "Load
+// mmutube video" prompt) — same reason the local-file path needs a click
+// on the file picker first: a remote 'play' command is not itself a user
+// gesture, so without one first, audio gets silently blocked. The player
+// object doesn't exist until setup()+loadMedia() complete, so the
+// play()-then-pause() unlock has to happen here, right after that, before
+// the player is wired into activeMediaAdapter — same pattern
+// unlockAutoplay() already applies to the raw <video> element, just
+// applied to the Kaltura player object instead.
 async function loadMediaVoteKaltura(entryId) {
   hideMediaVoteError();
   const container = document.getElementById('mediavote-kaltura-container');
-  document.getElementById('mediavote-filepicker').classList.add('hidden');
+  document.getElementById('mediavote-kaltura-prompt').classList.add('hidden');
   container.classList.remove('hidden');
 
   try {
@@ -2015,6 +2022,14 @@ async function loadMediaVoteKaltura(entryId) {
       );
     });
 
+    try {
+      player.play();
+      player.pause();
+    } catch (e) {
+      // Some browsers may still block this — nothing more to do here
+      // without a direct gesture on the player itself.
+    }
+
     activeMediaAdapter = makeKalturaAdapter(player);
     mediaTransportAppliedSeq = null;
     if (currentSession) applyTransportCommand(currentSession);
@@ -2031,13 +2046,20 @@ async function initMediaVoteDisplay(session) {
 
   const isMmutube = session.media_source_type === 'mmutube';
   document.getElementById('mediavote-filepicker').classList.toggle('hidden', isMmutube);
+  document.getElementById('mediavote-kaltura-prompt').classList.toggle('hidden', !isMmutube);
   document.getElementById('mediavote-video').classList.add('hidden');
-  document.getElementById('mediavote-kaltura-container').classList.toggle('hidden', !isMmutube);
+  // Stays hidden until the "Load mmutube video" click actually sets up the
+  // player — showing it any earlier would overlap the prompt above.
+  document.getElementById('mediavote-kaltura-container').classList.add('hidden');
 
   if (isMmutube) {
     if (session.media_entry_id) {
-      await loadMediaVoteKaltura(session.media_entry_id);
+      const entryId = session.media_entry_id;
+      document.getElementById('mediavote-kaltura-load-btn').onclick = async () => {
+        await loadMediaVoteKaltura(entryId);
+      };
     } else {
+      document.getElementById('mediavote-kaltura-prompt').classList.add('hidden');
       showMediaVoteError('This session is set to mmutube but has no video configured.');
     }
   } else {
