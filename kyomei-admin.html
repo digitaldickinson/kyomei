@@ -332,9 +332,28 @@
   .mediavote-seek-row { display: flex; align-items: center; gap: 10px; }
   .mediavote-seek-row label { font-size: 14px; color: var(--muted); }
   .mediavote-seek-row input { max-width: 100px; }
+  .mediavote-position-readout { color: var(--muted); font-size: 13px; margin-top: 10px; cursor: help; }
   .mediavote-count-panel { text-align: center; }
   .mediavote-count-label { color: var(--muted); font-size: 14px; margin-bottom: 4px; }
   .mediavote-count-value { font-size: 40px; font-weight: 800; }
+  .mediavote-bucket-label { color: var(--muted); font-size: 14px; margin-bottom: 8px; }
+  .mediavote-timeline-strip {
+    display: flex;
+    width: 100%;
+    height: 56px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .mediavote-timeline-segment { flex: 1; border-right: 1px solid var(--bg); }
+  .mediavote-timeline-segment:last-child { border-right: none; }
+  .mediavote-timeline-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; }
+  .mediavote-legend-item { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); }
+  .mediavote-legend-swatch { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+  .mediavote-timeline-breakdown { margin-top: 16px; font-size: 13px; color: var(--muted); }
+  .mediavote-breakdown-row { padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .mediavote-breakdown-row:last-child { border-bottom: none; }
+  .mediavote-breakdown-range { font-weight: 700; color: var(--text); margin-right: 8px; }
 
   /* ---- Session view ---- */
   .session-header {
@@ -635,10 +654,21 @@
             <button class="ghost" type="button" id="media-seek-btn">Seek</button>
           </div>
           <div id="media-seek-error" class="field-error hidden"></div>
+          <div id="mediavote-position-readout" class="mediavote-position-readout" title="Estimated — compare against the display screen">Est. position: Not started</div>
         </div>
         <div class="panel mediavote-count-panel">
           <div class="mediavote-count-label">Votes collected</div>
           <div class="mediavote-count-value" id="mediavote-count-value">0</div>
+        </div>
+        <div class="panel mediavote-bucket-panel">
+          <div class="mediavote-bucket-label">Timeline bucket size</div>
+          <div class="mode-toggle" id="mediavote-bucket-toggle">
+            <button type="button" data-seconds="1">1s</button>
+            <button type="button" class="active" data-seconds="5">5s</button>
+            <button type="button" data-seconds="10">10s</button>
+            <button type="button" data-seconds="15">15s</button>
+            <button type="button" data-seconds="30">30s</button>
+          </div>
         </div>
       </div>
 
@@ -663,6 +693,11 @@
         <div id="textmarkup-heatmap-view" class="textmarkup-passage"></div>
         <div id="textmarkup-community-view" class="textmarkup-community-view hidden"></div>
         <div class="quicktap-hint" id="textmarkup-cycle-hint">Press space to switch view</div>
+      </div>
+      <div id="mediavote-timeline-display" class="hidden">
+        <div id="mediavote-timeline-strip" class="mediavote-timeline-strip"></div>
+        <div id="mediavote-timeline-legend" class="mediavote-timeline-legend"></div>
+        <div id="mediavote-timeline-breakdown" class="mediavote-timeline-breakdown"></div>
       </div>
     </div>
   </div>
@@ -768,6 +803,7 @@ function showListScreen() {
   teardownTallySubscription();
   teardownTextMarkupSubscription();
   teardownMediaVoteSubscription();
+  stopMediaVotePositionTicker();
   document.getElementById('connection-banner').classList.add('hidden');
   guidedCategories = [];
   activeCategoryId = null;
@@ -1531,16 +1567,20 @@ function updateRevealUI() {
   const hiddenStatus = document.getElementById('results-hidden-status');
   const grid = document.getElementById('tally-grid');
   const tmCount = document.getElementById('textmarkup-count-display');
+  const mvTimeline = document.getElementById('mediavote-timeline-display');
 
   toggleBtn.textContent = resultsRevealed ? 'Hide results' : 'Reveal results';
   hiddenStatus.classList.toggle('hidden', resultsRevealed);
 
-  // Shared toggle button/state, but only one of the two "revealed content"
-  // containers is ever relevant per session — route to whichever applies
-  // rather than letting both react to the same resultsRevealed flip.
+  // Shared toggle button/state, but only one of the three "revealed
+  // content" containers is ever relevant per session — route to whichever
+  // applies rather than letting all of them react to the same
+  // resultsRevealed flip.
   const isTextMarkup = !!(currentSession && !currentSession.quick_tap_enabled && currentSession.text_markup_enabled);
+  const isMediaVote = !!(currentSession && !currentSession.quick_tap_enabled && !currentSession.text_markup_enabled && currentSession.media_vote_enabled);
   if (isTextMarkup) {
     grid.classList.add('hidden');
+    mvTimeline.classList.add('hidden');
     const wasHidden = tmCount.classList.contains('hidden');
     tmCount.classList.toggle('hidden', !resultsRevealed);
     if (wasHidden && resultsRevealed) {
@@ -1548,9 +1588,14 @@ function updateRevealUI() {
       textMarkupChartType = 'heatmap';
       applyTextMarkupChartTypeVisibility();
     }
+  } else if (isMediaVote) {
+    grid.classList.add('hidden');
+    tmCount.classList.add('hidden');
+    mvTimeline.classList.toggle('hidden', !resultsRevealed);
   } else {
     grid.classList.toggle('hidden', !resultsRevealed);
     tmCount.classList.add('hidden');
+    mvTimeline.classList.add('hidden');
   }
 }
 
@@ -1993,6 +2038,7 @@ function updateMediaTransportUI() {
   if (seekInput && document.activeElement !== seekInput) {
     seekInput.value = formatMsToMmSs(currentSession ? currentSession.media_transport_position_ms : 0);
   }
+  updateMediaVotePositionReadout();
 }
 
 // media_transport_position_ms only ever holds wherever the *last* command
@@ -2012,6 +2058,41 @@ function estimateCurrentPositionMs() {
     return basePosition + elapsedMs;
   }
   return basePosition;
+}
+
+// Admin-only diagnostic — no broadcast, no schema, no network calls of
+// its own. Reuses estimateCurrentPositionMs() (the exact same
+// reconstruction formula already used for Pause and, in spirit, by
+// display's own 'play' latency adjustment), so it's not a fix for drift
+// between admin and the display, just a way to glance at the two side by
+// side and correct manually via Seek if they've drifted apart.
+function updateMediaVotePositionReadout() {
+  const el = document.getElementById('mediavote-position-readout');
+  if (!el) return;
+
+  if (!currentSession || !currentSession.media_transport_action) {
+    el.textContent = 'Est. position: Not started';
+    return;
+  }
+
+  el.textContent = `Est. position: ${formatMsToMmSs(estimateCurrentPositionMs())}`;
+}
+
+let mediaVotePositionTickTimer = null;
+
+function startMediaVotePositionTicker() {
+  stopMediaVotePositionTicker();
+  updateMediaVotePositionReadout();
+  // A glance-at readout, not a stopwatch — 250ms is enough to read as
+  // smoothly ticking upward without a redundant per-frame timer.
+  mediaVotePositionTickTimer = setInterval(updateMediaVotePositionReadout, 250);
+}
+
+function stopMediaVotePositionTicker() {
+  if (mediaVotePositionTickTimer) {
+    clearInterval(mediaVotePositionTickTimer);
+    mediaVotePositionTickTimer = null;
+  }
 }
 
 // Writes the live broadcast state (sessions.media_transport_*) and logs a
@@ -2063,6 +2144,12 @@ async function sendTransportCommand(action, positionMs) {
 
   if (eventError) {
     showError('Transport command sent, but was not logged: ' + eventError.message);
+  } else {
+    // Keep the timeline's reconstruction cache in sync without a refetch —
+    // admin is the sole author of transport commands, so appending locally
+    // is reliable (no separate realtime subscription on this table needed).
+    mediaVoteRawEvents.push({ action, position_ms: positionMs, created_at: issuedAt });
+    renderMediaVoteTimeline();
   }
 
   return true;
@@ -2141,9 +2228,11 @@ function setupMediaVoteSubscription() {
       schema: 'public',
       table: 'media_vote_responses',
       filter: `session_id=eq.${currentSession.id}`
-    }, () => {
+    }, (payload) => {
       mediaVoteCount += 1;
       updateMediaVoteCountUI();
+      mediaVoteRawResponses.push({ option_id: payload.new.option_id, created_at: payload.new.created_at });
+      renderMediaVoteTimeline();
     })
     .subscribe((status) => {
       // See setupFeedSubscription: ignore callbacks from a channel that's
@@ -2182,7 +2271,205 @@ function teardownMediaVoteSubscription() {
   }
 }
 
+// ---------------- Media Vote timeline (Stage 2) ----------------
+// Reconstructed from the permanent media_transport_events log joined
+// against media_vote_responses.created_at — never anything captured on
+// the vote itself (Stage 1 deliberately never tracked clip position on
+// the student side). Raw rows are cached locally so changing the bucket
+// size re-buckets already-fetched data instead of refetching.
+let mediaTimelineBucketSeconds = 5;
+let mediaVoteRawEvents = []; // {action, position_ms, created_at}, ascending
+let mediaVoteRawResponses = []; // {option_id, created_at}, ascending
+let mediaVoteTimelineOptions = []; // quick_tap_options rows, for colour + legend
+
+// Single sweep over both sorted-by-created_at lists — not a per-vote
+// search against the full events list. A vote landing before any
+// transport event (shouldn't normally happen) is excluded from the
+// timeline; it still counts in the raw total shown elsewhere.
+function reconstructMediaVotePositions(events, responses) {
+  const positions = [];
+  let eventIdx = 0;
+  let lastEvent = null;
+
+  for (const vote of responses) {
+    const voteAtMs = new Date(vote.created_at).getTime();
+    while (eventIdx < events.length && new Date(events[eventIdx].created_at).getTime() <= voteAtMs) {
+      lastEvent = events[eventIdx];
+      eventIdx++;
+    }
+    if (!lastEvent) continue;
+
+    let positionSeconds;
+    if (lastEvent.action === 'play') {
+      const issuedAtMs = new Date(lastEvent.created_at).getTime();
+      positionSeconds = (lastEvent.position_ms / 1000) + (voteAtMs - issuedAtMs) / 1000;
+    } else {
+      positionSeconds = lastEvent.position_ms / 1000;
+    }
+    positions.push({ optionId: vote.option_id, positionSeconds: Math.max(0, positionSeconds) });
+  }
+
+  return positions;
+}
+
+// Timeline length is derived from the furthest reconstructed vote (plus
+// one bucket of padding) — not an authoritative clip duration, since
+// nothing currently captures or broadcasts that. A known, acceptable
+// simplification: the timeline only extends as far as votes were cast.
+function bucketMediaVoteTimeline(positions, bucketSeconds) {
+  if (positions.length === 0) return [];
+
+  const maxPosition = Math.max(...positions.map(p => p.positionSeconds));
+  const bucketCount = Math.floor(maxPosition / bucketSeconds) + 1;
+
+  const buckets = [];
+  for (let i = 0; i < bucketCount; i++) {
+    buckets.push({
+      startSeconds: i * bucketSeconds,
+      endSeconds: (i + 1) * bucketSeconds,
+      counts: {},
+      total: 0,
+      dominantOptionId: null,
+      dominantCount: 0,
+      consensusStrength: 0
+    });
+  }
+
+  for (const p of positions) {
+    const idx = Math.min(bucketCount - 1, Math.floor(p.positionSeconds / bucketSeconds));
+    const bucket = buckets[idx];
+    bucket.counts[p.optionId] = (bucket.counts[p.optionId] || 0) + 1;
+  }
+
+  for (const bucket of buckets) {
+    for (const [optionId, count] of Object.entries(bucket.counts)) {
+      bucket.total += count;
+      if (count > bucket.dominantCount) {
+        bucket.dominantCount = count;
+        bucket.dominantOptionId = optionId;
+      }
+    }
+    bucket.consensusStrength = bucket.total > 0 ? bucket.dominantCount / bucket.total : 0;
+  }
+
+  return buckets;
+}
+
+function mediaVoteOptionById(optionId) {
+  return mediaVoteTimelineOptions.find(o => o.id === optionId) || null;
+}
+
+function renderMediaVoteTimelineStrip(buckets) {
+  const strip = document.getElementById('mediavote-timeline-strip');
+  if (buckets.length === 0) {
+    strip.innerHTML = '<div class="muted">No votes yet.</div>';
+    return;
+  }
+  strip.innerHTML = buckets.map(bucket => {
+    const option = bucket.dominantOptionId ? mediaVoteOptionById(bucket.dominantOptionId) : null;
+    const color = option ? (option.color || '#5b8cff') : 'transparent';
+    const opacity = bucket.total > 0 ? bucket.consensusStrength : 0;
+    const style = bucket.total > 0
+      ? `background:${color};opacity:${opacity};`
+      : 'background:var(--panel-2);';
+    return `<div class="mediavote-timeline-segment" style="${style}" title="${formatMsToMmSs(bucket.startSeconds * 1000)}–${formatMsToMmSs(bucket.endSeconds * 1000)}"></div>`;
+  }).join('');
+}
+
+function renderMediaVoteTimelineLegend() {
+  const legend = document.getElementById('mediavote-timeline-legend');
+  legend.innerHTML = mediaVoteTimelineOptions.map(opt => `
+    <div class="mediavote-legend-item">
+      <span class="mediavote-legend-swatch" style="background:${opt.color || '#5b8cff'}"></span>
+      <span>${escapeHtml(opt.label)}</span>
+    </div>
+  `).join('');
+}
+
+function renderMediaVoteTimelineBreakdown(buckets) {
+  const breakdown = document.getElementById('mediavote-timeline-breakdown');
+  if (buckets.length === 0) {
+    breakdown.innerHTML = '';
+    return;
+  }
+  breakdown.innerHTML = buckets.map(bucket => {
+    const range = `${formatMsToMmSs(bucket.startSeconds * 1000)}–${formatMsToMmSs(bucket.endSeconds * 1000)}`;
+    const parts = Object.entries(bucket.counts).map(([optionId, count]) => {
+      const option = mediaVoteOptionById(optionId);
+      return `${escapeHtml(option ? option.label : 'Unknown')} ${count}`;
+    });
+    const detail = parts.length > 0 ? parts.join(', ') : 'No votes';
+    return `<div class="mediavote-breakdown-row"><span class="mediavote-breakdown-range">${range}</span>${detail}</div>`;
+  }).join('');
+}
+
+function renderMediaVoteTimeline() {
+  const positions = reconstructMediaVotePositions(mediaVoteRawEvents, mediaVoteRawResponses);
+  const buckets = bucketMediaVoteTimeline(positions, mediaTimelineBucketSeconds);
+  renderMediaVoteTimelineStrip(buckets);
+  renderMediaVoteTimelineLegend();
+  renderMediaVoteTimelineBreakdown(buckets);
+}
+
+async function loadMediaVoteTimelineData() {
+  const [eventsRes, votesRes, optionsRes] = await Promise.all([
+    supabaseClient
+      .from('media_transport_events')
+      .select('action, position_ms, created_at')
+      .eq('session_id', currentSession.id)
+      .order('created_at', { ascending: true }),
+    supabaseClient
+      .from('media_vote_responses')
+      .select('option_id, created_at')
+      .eq('session_id', currentSession.id)
+      .order('created_at', { ascending: true }),
+    supabaseClient
+      .from('quick_tap_options')
+      .select('*')
+      .eq('session_id', currentSession.id)
+      .order('sort_order', { ascending: true })
+  ]);
+
+  mediaVoteRawEvents = eventsRes.data || [];
+  mediaVoteRawResponses = votesRes.data || [];
+  mediaVoteTimelineOptions = optionsRes.data || [];
+}
+
+function renderMediaVoteBucketToggle() {
+  document.querySelectorAll('#mediavote-bucket-toggle button').forEach(btn => {
+    btn.classList.toggle('active', Number(btn.dataset.seconds) === mediaTimelineBucketSeconds);
+  });
+}
+
+async function setMediaTimelineBucketSeconds(seconds) {
+  if (!currentSession || seconds === mediaTimelineBucketSeconds) return;
+  const previous = mediaTimelineBucketSeconds;
+  mediaTimelineBucketSeconds = seconds;
+  renderMediaVoteBucketToggle();
+  renderMediaVoteTimeline();
+
+  const { error } = await supabaseClient
+    .from('sessions')
+    .update({ media_timeline_bucket_seconds: seconds })
+    .eq('id', currentSession.id);
+
+  if (error) {
+    mediaTimelineBucketSeconds = previous;
+    renderMediaVoteBucketToggle();
+    renderMediaVoteTimeline();
+    handleQueryError(error);
+    return;
+  }
+
+  currentSession.media_timeline_bucket_seconds = seconds;
+}
+
+document.querySelectorAll('#mediavote-bucket-toggle button').forEach(btn => {
+  btn.addEventListener('click', () => setMediaTimelineBucketSeconds(Number(btn.dataset.seconds)));
+});
+
 async function enterSession(session) {
+  stopMediaVotePositionTicker();
   currentSession = session;
   document.getElementById('session-view-name').textContent = session.name;
   document.getElementById('session-view-code').textContent = session.session_code;
@@ -2212,7 +2499,7 @@ async function enterSession(session) {
   document.getElementById('results-heading').textContent =
     isQuickTap ? 'Live results' : (isTextMarkup ? 'Text markup responses' : 'Live feed');
   document.getElementById('results-heading').classList.toggle('hidden', isMediaVote);
-  document.getElementById('quicktap-results-controls').classList.toggle('hidden', !(isQuickTap || isTextMarkup));
+  document.getElementById('quicktap-results-controls').classList.toggle('hidden', !(isQuickTap || isTextMarkup || isMediaVote));
   document.getElementById('guided-category-picker').classList.toggle('hidden', !isGuided);
   document.getElementById('textmarkup-prompt-picker').classList.toggle('hidden', !isTextMarkup);
   document.getElementById('mediavote-panel').classList.toggle('hidden', !isMediaVote);
@@ -2261,14 +2548,22 @@ async function enterSession(session) {
     document.getElementById('feed').classList.add('hidden');
     document.getElementById('feed-empty').classList.add('hidden');
     document.getElementById('guided-waiting-status').classList.add('hidden');
-    document.getElementById('results-hidden-status').classList.add('hidden');
     document.getElementById('tally-grid').classList.add('hidden');
     document.getElementById('textmarkup-waiting-status').classList.add('hidden');
 
     mediaVoteIsPlaying = session.media_transport_action === 'play';
     updateMediaTransportUI();
+    startMediaVotePositionTicker();
     await loadMediaVoteCount();
     setupMediaVoteSubscription();
+
+    mediaTimelineBucketSeconds = session.media_timeline_bucket_seconds || 5;
+    renderMediaVoteBucketToggle();
+    await loadMediaVoteTimelineData();
+    renderMediaVoteTimeline();
+
+    resultsRevealed = !!session.results_revealed;
+    updateRevealUI();
   } else {
     document.getElementById('results-hidden-status').classList.add('hidden');
     document.getElementById('tally-grid').classList.add('hidden');

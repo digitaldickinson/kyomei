@@ -421,6 +421,30 @@
   .mediavote-filepicker-title { font-size: clamp(1.4rem, 2.4vw, 2.2rem); color: var(--muted); }
   .mediavote-video { width: 100vw; height: 100vh; object-fit: contain; background: #000; }
   .mediavote-kaltura-container { width: 100vw; height: 100vh; }
+  .mediavote-timeline-screen {
+    width: 100%;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    padding: 4vw;
+  }
+  .mediavote-display-timeline-strip {
+    display: flex;
+    width: 100%;
+    max-width: 1400px;
+    height: clamp(60px, 10vh, 120px);
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .mediavote-display-timeline-segment { flex: 1; border-right: 1px solid var(--bg); }
+  .mediavote-display-timeline-segment:last-child { border-right: none; }
+  .mediavote-display-timeline-legend { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; }
+  .mediavote-display-legend-item { display: flex; align-items: center; gap: 8px; font-size: clamp(1rem, 1.6vw, 1.3rem); color: var(--text); }
+  .mediavote-display-legend-swatch { width: 20px; height: 20px; border-radius: 5px; flex-shrink: 0; }
   .mediavote-error {
     position: fixed;
     top: 16px;
@@ -552,6 +576,10 @@
   </div>
   <video id="mediavote-video" class="mediavote-video hidden" playsinline></video>
   <div id="mediavote-kaltura-container" class="mediavote-kaltura-container hidden"></div>
+  <div id="mediavote-timeline-screen" class="mediavote-timeline-screen hidden">
+    <div id="mediavote-display-timeline-strip" class="mediavote-display-timeline-strip"></div>
+    <div id="mediavote-display-timeline-legend" class="mediavote-display-timeline-legend"></div>
+  </div>
 </div>
 
 <script>
@@ -598,7 +626,7 @@ function showScreen(id) {
 // still show the banner, not get masked by the healthy one's SUBSCRIBED
 // event. Unused keys for whichever mode is active just stay true and never
 // affect the check.
-const channelStatus = { quickTap: true, sessions: true, feed: true, textMarkup: true };
+const channelStatus = { quickTap: true, sessions: true, feed: true, textMarkup: true, mediaVote: true };
 
 function setConnectionStatus(channel, connected) {
   channelStatus[channel] = connected;
@@ -2038,19 +2066,178 @@ async function loadMediaVoteKaltura(entryId) {
   }
 }
 
+// ---------------- Media Vote timeline (Stage 2) ----------------
+// Same reconstruction/bucketing as admin (kept as separate copies — this
+// is a separate document, no shared module to import from). Read access
+// to media_transport_events/media_vote_responses only opens up to anon
+// once results_revealed is true (see the schema's "anon can read
+// revealed ..." policies) — matches when this code actually needs them.
+let mediaVoteSourceType = 'local';
+let mediaTimelineBucketSeconds = 5;
+let mediaVoteRawEvents = [];
+let mediaVoteRawResponses = [];
+let mediaVoteTimelineOptions = [];
+
+function reconstructMediaVotePositions(events, responses) {
+  const positions = [];
+  let eventIdx = 0;
+  let lastEvent = null;
+
+  for (const vote of responses) {
+    const voteAtMs = new Date(vote.created_at).getTime();
+    while (eventIdx < events.length && new Date(events[eventIdx].created_at).getTime() <= voteAtMs) {
+      lastEvent = events[eventIdx];
+      eventIdx++;
+    }
+    if (!lastEvent) continue;
+
+    let positionSeconds;
+    if (lastEvent.action === 'play') {
+      const issuedAtMs = new Date(lastEvent.created_at).getTime();
+      positionSeconds = (lastEvent.position_ms / 1000) + (voteAtMs - issuedAtMs) / 1000;
+    } else {
+      positionSeconds = lastEvent.position_ms / 1000;
+    }
+    positions.push({ optionId: vote.option_id, positionSeconds: Math.max(0, positionSeconds) });
+  }
+
+  return positions;
+}
+
+function bucketMediaVoteTimeline(positions, bucketSeconds) {
+  if (positions.length === 0) return [];
+
+  const maxPosition = Math.max(...positions.map(p => p.positionSeconds));
+  const bucketCount = Math.floor(maxPosition / bucketSeconds) + 1;
+
+  const buckets = [];
+  for (let i = 0; i < bucketCount; i++) {
+    buckets.push({ counts: {}, total: 0, dominantOptionId: null, dominantCount: 0, consensusStrength: 0 });
+  }
+
+  for (const p of positions) {
+    const idx = Math.min(bucketCount - 1, Math.floor(p.positionSeconds / bucketSeconds));
+    const bucket = buckets[idx];
+    bucket.counts[p.optionId] = (bucket.counts[p.optionId] || 0) + 1;
+  }
+
+  for (const bucket of buckets) {
+    for (const [optionId, count] of Object.entries(bucket.counts)) {
+      bucket.total += count;
+      if (count > bucket.dominantCount) {
+        bucket.dominantCount = count;
+        bucket.dominantOptionId = optionId;
+      }
+    }
+    bucket.consensusStrength = bucket.total > 0 ? bucket.dominantCount / bucket.total : 0;
+  }
+
+  return buckets;
+}
+
+function mediaVoteOptionById(optionId) {
+  return mediaVoteTimelineOptions.find(o => o.id === optionId) || null;
+}
+
+// Visual strip + legend only — the precise per-bucket breakdown is
+// admin-only (room-scale legibility over precision on the display).
+function renderMediaVoteDisplayTimeline() {
+  const positions = reconstructMediaVotePositions(mediaVoteRawEvents, mediaVoteRawResponses);
+  const buckets = bucketMediaVoteTimeline(positions, mediaTimelineBucketSeconds);
+
+  const strip = document.getElementById('mediavote-display-timeline-strip');
+  const legend = document.getElementById('mediavote-display-timeline-legend');
+
+  strip.innerHTML = buckets.map(bucket => {
+    const option = bucket.dominantOptionId ? mediaVoteOptionById(bucket.dominantOptionId) : null;
+    const color = option ? (option.color || '#5b8cff') : 'transparent';
+    const opacity = bucket.total > 0 ? bucket.consensusStrength : 0;
+    const style = bucket.total > 0
+      ? `background:${color};opacity:${opacity};`
+      : 'background:var(--panel-2);';
+    return `<div class="mediavote-display-timeline-segment" style="${style}"></div>`;
+  }).join('');
+
+  legend.innerHTML = mediaVoteTimelineOptions.map(opt => `
+    <div class="mediavote-display-legend-item">
+      <span class="mediavote-display-legend-swatch" style="background:${opt.color || '#5b8cff'}"></span>
+      <span>${escapeHtml(opt.label)}</span>
+    </div>
+  `).join('');
+}
+
+async function loadMediaVoteTimelineData() {
+  const [eventsRes, votesRes, optionsRes] = await Promise.all([
+    supabaseClient
+      .from('media_transport_events')
+      .select('action, position_ms, created_at')
+      .eq('session_id', currentSession.id)
+      .order('created_at', { ascending: true }),
+    supabaseClient
+      .from('media_vote_responses')
+      .select('option_id, created_at')
+      .eq('session_id', currentSession.id)
+      .order('created_at', { ascending: true }),
+    supabaseClient
+      .from('quick_tap_options')
+      .select('*')
+      .eq('session_id', currentSession.id)
+      .order('sort_order', { ascending: true })
+  ]);
+
+  mediaVoteRawEvents = eventsRes.data || [];
+  mediaVoteRawResponses = votesRes.data || [];
+  mediaVoteTimelineOptions = optionsRes.data || [];
+}
+
+// Revealing swaps the whole screen from watch-and-vote to discuss-the-
+// timeline — the clip itself isn't needed once the tutor's walking
+// through how consensus evolved.
+function showMediaVoteTimelineView() {
+  document.getElementById('mediavote-filepicker').classList.add('hidden');
+  document.getElementById('mediavote-kaltura-prompt').classList.add('hidden');
+  document.getElementById('mediavote-video').classList.add('hidden');
+  document.getElementById('mediavote-kaltura-container').classList.add('hidden');
+  document.getElementById('mediavote-timeline-screen').classList.remove('hidden');
+}
+
+// Un-revealing (or initial load pre-reveal) restores whichever state the
+// clip/player was actually in — already loaded (just re-show it) or never
+// loaded yet (show the picker/prompt again), per source type.
+function showMediaVoteNonTimelineView() {
+  document.getElementById('mediavote-timeline-screen').classList.add('hidden');
+  if (activeMediaAdapter) {
+    if (mediaVoteSourceType === 'mmutube') {
+      document.getElementById('mediavote-kaltura-container').classList.remove('hidden');
+    } else {
+      document.getElementById('mediavote-video').classList.remove('hidden');
+    }
+  } else {
+    if (mediaVoteSourceType === 'mmutube') {
+      document.getElementById('mediavote-kaltura-prompt').classList.remove('hidden');
+    } else {
+      document.getElementById('mediavote-filepicker').classList.remove('hidden');
+    }
+  }
+}
+
 async function initMediaVoteDisplay(session) {
   showScreen('mediavote-display-screen');
   hideMediaVoteError();
   activeMediaAdapter = null;
   mediaTransportAppliedSeq = null;
+  mediaVoteSourceType = session.media_source_type === 'mmutube' ? 'mmutube' : 'local';
+  resultsRevealed = !!session.results_revealed;
+  mediaTimelineBucketSeconds = session.media_timeline_bucket_seconds || 5;
 
-  const isMmutube = session.media_source_type === 'mmutube';
+  const isMmutube = mediaVoteSourceType === 'mmutube';
   document.getElementById('mediavote-filepicker').classList.toggle('hidden', isMmutube);
   document.getElementById('mediavote-kaltura-prompt').classList.toggle('hidden', !isMmutube);
   document.getElementById('mediavote-video').classList.add('hidden');
   // Stays hidden until the "Load mmutube video" click actually sets up the
   // player — showing it any earlier would overlap the prompt above.
   document.getElementById('mediavote-kaltura-container').classList.add('hidden');
+  document.getElementById('mediavote-timeline-screen').classList.add('hidden');
 
   if (isMmutube) {
     if (session.media_entry_id) {
@@ -2092,7 +2279,14 @@ async function initMediaVoteDisplay(session) {
     };
   }
 
+  if (resultsRevealed) {
+    await loadMediaVoteTimelineData();
+    renderMediaVoteDisplayTimeline();
+    showMediaVoteTimelineView();
+  }
+
   setupSessionsSubscription();
+  setupMediaVoteResponsesSubscription();
 }
 
 // 'play': position + elapsed real time since issued_at (broadcast/
@@ -2125,6 +2319,61 @@ function applyTransportCommand(sessionRow) {
     activeMediaAdapter.setCurrentTime(positionMs / 1000);
   } else if (action === 'seek') {
     activeMediaAdapter.setCurrentTime(positionMs / 1000);
+  }
+}
+
+// ---------------- Media Vote responses subscription (live timeline updates) ----------------
+let mediaVoteResponsesChannel = null;
+let mediaVoteResponsesReconnectTimer = null;
+
+function setupMediaVoteResponsesSubscription() {
+  teardownMediaVoteResponsesSubscription();
+
+  const channel = supabaseClient
+    .channel(`display_mv_responses_${currentSession.id}`)
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'media_vote_responses',
+      filter: `session_id=eq.${currentSession.id}`
+    }, (payload) => {
+      // Only meaningful once revealed — anon read access to this table is
+      // itself gated on results_revealed (same herding-prevention pattern
+      // as quick-tap/text-markup), so a pre-reveal INSERT event carries no
+      // data this device could use anyway.
+      if (!resultsRevealed) return;
+      mediaVoteRawResponses.push({ option_id: payload.new.option_id, created_at: payload.new.created_at });
+      renderMediaVoteDisplayTimeline();
+    })
+    .subscribe((status) => {
+      if (mediaVoteResponsesChannel !== channel) return;
+      if (status === 'SUBSCRIBED') {
+        setConnectionStatus('mediaVote', true);
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        setConnectionStatus('mediaVote', false);
+        scheduleMediaVoteResponsesReconnect();
+      }
+    });
+
+  mediaVoteResponsesChannel = channel;
+}
+
+function scheduleMediaVoteResponsesReconnect() {
+  if (mediaVoteResponsesReconnectTimer) return;
+  mediaVoteResponsesReconnectTimer = setTimeout(() => {
+    mediaVoteResponsesReconnectTimer = null;
+    if (currentSession && displayMode === 'mediavote') setupMediaVoteResponsesSubscription();
+  }, 3000);
+}
+
+function teardownMediaVoteResponsesSubscription() {
+  if (mediaVoteResponsesChannel) {
+    supabaseClient.removeChannel(mediaVoteResponsesChannel);
+    mediaVoteResponsesChannel = null;
+  }
+  if (mediaVoteResponsesReconnectTimer) {
+    clearTimeout(mediaVoteResponsesReconnectTimer);
+    mediaVoteResponsesReconnectTimer = null;
   }
 }
 
@@ -2327,6 +2576,31 @@ function setupSessionsSubscription() {
         currentSession.media_transport_issued_at = payload.new.media_transport_issued_at;
         currentSession.media_transport_seq = payload.new.media_transport_seq;
         applyTransportCommand(currentSession);
+
+        const newBucketSeconds = payload.new.media_timeline_bucket_seconds || 5;
+        const bucketChanged = newBucketSeconds !== mediaTimelineBucketSeconds;
+        if (bucketChanged) {
+          mediaTimelineBucketSeconds = newBucketSeconds;
+          currentSession.media_timeline_bucket_seconds = newBucketSeconds;
+        }
+
+        const newRevealed = !!payload.new.results_revealed;
+        const revealChanged = newRevealed !== resultsRevealed;
+        if (revealChanged) {
+          resultsRevealed = newRevealed;
+          currentSession.results_revealed = newRevealed;
+          if (resultsRevealed) {
+            await loadMediaVoteTimelineData();
+            renderMediaVoteDisplayTimeline();
+            showMediaVoteTimelineView();
+          } else {
+            showMediaVoteNonTimelineView();
+          }
+        } else if (bucketChanged && resultsRevealed) {
+          // Cheap re-bucket of already-fetched data — no refetch needed
+          // just because the slider moved.
+          renderMediaVoteDisplayTimeline();
+        }
       }
     })
     .subscribe((status) => {
