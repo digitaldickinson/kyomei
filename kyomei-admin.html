@@ -1872,11 +1872,26 @@ function applyTextMarkupChartTypeVisibility() {
   document.getElementById('textmarkup-community-view').classList.toggle('hidden', textMarkupChartType !== 'community');
 }
 
-function cycleTextMarkupChartType() {
+async function cycleTextMarkupChartType() {
   if (!currentSession || currentSession.quick_tap_enabled || !currentSession.text_markup_enabled || !resultsRevealed) return;
+  const previous = textMarkupChartType;
   const idx = TEXTMARKUP_CHART_TYPES.indexOf(textMarkupChartType);
   textMarkupChartType = TEXTMARKUP_CHART_TYPES[(idx + 1) % TEXTMARKUP_CHART_TYPES.length];
   applyTextMarkupChartTypeVisibility();
+
+  const { error } = await supabaseClient
+    .from('sessions')
+    .update({ text_markup_chart_type: textMarkupChartType })
+    .eq('id', currentSession.id);
+
+  if (error) {
+    textMarkupChartType = previous;
+    applyTextMarkupChartTypeVisibility();
+    handleQueryError(error);
+    return;
+  }
+
+  currentSession.text_markup_chart_type = textMarkupChartType;
 }
 
 async function loadTextMarkupPrompts() {
@@ -2075,13 +2090,31 @@ function setupMediaSessionRowSubscription() {
         updateMediaPlayerReadyUI();
       }
     })
-    .subscribe((status) => {
+    .subscribe(async (status) => {
       // See setupFeedSubscription: ignore callbacks from a channel that's
       // no longer the active one (removeChannel fires CLOSED on teardown).
       if (mediaSessionRowChannel !== channel) return;
       const banner = document.getElementById('connection-banner');
       if (status === 'SUBSCRIBED') {
         banner.classList.add('hidden');
+        // Realtime only pushes events that happen while subscribed — it
+        // doesn't replay anything missed during a disconnect. Without
+        // this, a reconnect (or the initial subscribe racing display's
+        // own ready update) could leave this stuck at a stale value
+        // forever, since nothing further would ever prompt a refresh.
+        const { data, error } = await supabaseClient
+          .from('sessions')
+          .select('media_player_ready')
+          .eq('id', currentSession.id)
+          .maybeSingle();
+        if (!error && data) {
+          const newReady = !!data.media_player_ready;
+          if (newReady !== mediaPlayerReady) {
+            mediaPlayerReady = newReady;
+            currentSession.media_player_ready = newReady;
+            updateMediaPlayerReadyUI();
+          }
+        }
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
         banner.classList.remove('hidden');
         scheduleMediaSessionRowReconnect();
@@ -2695,9 +2728,29 @@ async function enterSession(session) {
     await loadMediaVoteCount();
     setupMediaVoteSubscription();
 
-    mediaPlayerReady = !!session.media_player_ready;
+    mediaPlayerReady = !!session.media_player_ready; // optimistic initial guess
     updateMediaPlayerReadyUI();
     setupMediaSessionRowSubscription();
+
+    // The list's snapshot of media_player_ready can already be stale by
+    // the time this session is actually opened — it's the first field
+    // written by a different actor (display, independently) rather than
+    // admin itself, so the subscription alone (which only delivers
+    // updates from the moment it starts listening onward) can miss a
+    // change that already happened. One fresh, targeted fetch closes
+    // that gap: the subscription is already live by the time this
+    // resolves, so nothing in between falls through uncaught.
+    const { data: freshRow, error: freshRowError } = await supabaseClient
+      .from('sessions')
+      .select('media_player_ready')
+      .eq('id', session.id)
+      .maybeSingle();
+
+    if (!freshRowError && freshRow) {
+      mediaPlayerReady = !!freshRow.media_player_ready;
+      currentSession.media_player_ready = mediaPlayerReady;
+      updateMediaPlayerReadyUI();
+    }
 
     mediaTimelineBucketSeconds = session.media_timeline_bucket_seconds || 5;
     renderMediaVoteBucketToggle();
@@ -3679,9 +3732,10 @@ function applyChartTypeVisibility() {
   if (hintEl) hintEl.classList.toggle('hidden', CHART_TYPES.length <= 1);
 }
 
-function cycleChartType() {
+async function cycleChartType() {
   if (!currentSession || !currentSession.quick_tap_enabled || !resultsRevealed) return;
   if (CHART_TYPES.length <= 1) return; // traffic-light / confidence sessions have nothing to cycle to
+  const previous = chartType;
   const idx = CHART_TYPES.indexOf(chartType);
   chartType = CHART_TYPES[(idx + 1) % CHART_TYPES.length];
   applyChartTypeVisibility();
@@ -3692,6 +3746,20 @@ function cycleChartType() {
   }
   // buttons/bar are the only other members of this cycle and are already
   // eagerly built/kept in sync by renderQuickTapViews()/handleQuickTapInsert().
+
+  const { error } = await supabaseClient
+    .from('sessions')
+    .update({ quick_tap_chart_type: chartType })
+    .eq('id', currentSession.id);
+
+  if (error) {
+    chartType = previous;
+    applyChartTypeVisibility();
+    handleQueryError(error);
+    return;
+  }
+
+  currentSession.quick_tap_chart_type = chartType;
 }
 
 document.addEventListener('keydown', (e) => {

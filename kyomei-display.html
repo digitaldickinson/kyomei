@@ -1242,11 +1242,15 @@ function applyChartTypeVisibility() {
   if (hintEl) hintEl.classList.toggle('hidden', CHART_TYPES.length <= 1);
 }
 
-function cycleChartType() {
-  if (displayMode !== 'quicktap' || !resultsRevealed) return;
-  if (CHART_TYPES.length <= 1) return; // nothing to cycle to — spacebar is a silent no-op
-  const idx = CHART_TYPES.indexOf(chartType);
-  chartType = CHART_TYPES[(idx + 1) % CHART_TYPES.length];
+// Driven entirely by sessions.quick_tap_chart_type now — display no
+// longer decides its own chart type via a local spacebar listener (same
+// fix already applied to group-by-category: admin broadcasts, display
+// just applies). CHART_TYPES.includes() guards against a stale/unrelated
+// value for Pulse Check-styled sessions (traffic_light/confidence), which
+// force a single forever-CHART_TYPES entry and never write this column.
+function applyQuickTapChartType(newType) {
+  if (displayMode !== 'quicktap' || !CHART_TYPES.includes(newType) || newType === chartType) return;
+  chartType = newType;
   applyChartTypeVisibility();
 
   if (chartType === 'pie') {
@@ -1261,17 +1265,6 @@ function cycleChartType() {
   // renderQuickTapGrid() and incrementQuickTapCount(), so no build-on-cycle
   // step needed for them.
 }
-
-document.addEventListener('keydown', (e) => {
-  if (e.key === ' ' || e.key === 'Spacebar') {
-    e.preventDefault(); // stop the page from scrolling on spacebar
-    if (displayMode === 'textmarkup') {
-      cycleTextMarkupChartType();
-    } else {
-      cycleChartType();
-    }
-  }
-});
 
 function buildPieChart() {
   const container = document.getElementById('quicktap-pie-view');
@@ -1483,7 +1476,9 @@ async function initQuickTapDisplay(session) {
     chartType = 'sparkline';
   } else {
     CHART_TYPES = ['buttons', 'bar', 'pie'];
-    chartType = 'buttons';
+    // Resume wherever admin last cycled to, not always 'buttons' — a
+    // display reload mid-session shouldn't silently fall out of sync.
+    chartType = CHART_TYPES.includes(session.quick_tap_chart_type) ? session.quick_tap_chart_type : 'buttons';
   }
   // The HTML's default hidden/visible classes only match chartType=
   // 'buttons' — without this, a traffic-light/confidence session builds
@@ -1508,6 +1503,17 @@ async function initQuickTapDisplay(session) {
 
   if (resultsRevealed) {
     await loadQuickTapCounts();
+    // Pie is the one view built lazily on arrival rather than eagerly
+    // alongside buttons/bar — needed here too if resuming straight into
+    // it (e.g. a display reload after admin had already cycled to pie).
+    if (chartType === 'pie') {
+      const pieView = document.getElementById('quicktap-pie-view');
+      if (pieView.children.length === 0) {
+        buildPieChart();
+      } else {
+        updatePieSegments();
+      }
+    }
   }
 
   setupQuickTapResponsesSubscription();
@@ -1688,10 +1694,11 @@ function applyTextMarkupChartTypeVisibility() {
   document.getElementById('textmarkup-display-community-view').classList.toggle('hidden', textMarkupChartType !== 'community');
 }
 
-function cycleTextMarkupChartType() {
-  if (displayMode !== 'textmarkup' || !resultsRevealed) return;
-  const idx = TEXTMARKUP_CHART_TYPES.indexOf(textMarkupChartType);
-  textMarkupChartType = TEXTMARKUP_CHART_TYPES[(idx + 1) % TEXTMARKUP_CHART_TYPES.length];
+// Same fix as applyQuickTapChartType() above — driven by
+// sessions.text_markup_chart_type, no local spacebar listener anymore.
+function applyTextMarkupChartType(newType) {
+  if (displayMode !== 'textmarkup' || !TEXTMARKUP_CHART_TYPES.includes(newType) || newType === textMarkupChartType) return;
+  textMarkupChartType = newType;
   applyTextMarkupChartTypeVisibility();
 }
 
@@ -1715,7 +1722,11 @@ async function initTextMarkupDisplay(session) {
   textMarkupWords = tokenized.words;
   textMarkupParagraphs = tokenized.paragraphs;
 
-  textMarkupChartType = 'heatmap';
+  // Resume wherever admin last cycled to, not always 'heatmap' — a
+  // display reload mid-session shouldn't silently fall out of sync.
+  textMarkupChartType = TEXTMARKUP_CHART_TYPES.includes(session.text_markup_chart_type)
+    ? session.text_markup_chart_type
+    : 'heatmap';
   applyTextMarkupChartTypeVisibility();
 
   document.getElementById('textmarkup-display-session-name').textContent = session.name;
@@ -2605,6 +2616,12 @@ function setupSessionsSubscription() {
             await loadQuickTapCounts();
           }
         }
+
+        const newChartType = payload.new.quick_tap_chart_type;
+        if (newChartType && newChartType !== chartType) {
+          currentSession.quick_tap_chart_type = newChartType;
+          applyQuickTapChartType(newChartType);
+        }
       } else if (displayMode === 'textmarkup') {
         const newPromptId = payload.new.active_prompt_id || null;
         const newRevealed = !!payload.new.results_revealed;
@@ -2625,6 +2642,16 @@ function setupSessionsSubscription() {
         }
         if (promptChanged || revealChanged) {
           await renderTextMarkupDisplayState();
+        }
+
+        // Only apply a genuine cycle broadcast — not the same event's
+        // (possibly stale) chart-type value on a reveal event, which
+        // would otherwise silently undo the "land on heatmap first"
+        // reset above.
+        const newChartType = payload.new.text_markup_chart_type;
+        if (!revealChanged && newChartType && newChartType !== textMarkupChartType) {
+          currentSession.text_markup_chart_type = newChartType;
+          applyTextMarkupChartType(newChartType);
         }
       } else if (displayMode === 'mediavote') {
         currentSession.media_transport_action = payload.new.media_transport_action;
