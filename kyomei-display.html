@@ -405,11 +405,39 @@
     cursor: pointer;
   }
   .display-btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .mediavote-filepicker input[type="text"] {
+    font-family: inherit;
+    background: var(--panel-2);
+    border: 2px solid var(--border);
+    color: var(--text);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 1rem;
+    width: min(90vw, 480px);
+  }
+  .field-error { color: var(--danger); font-size: 0.9rem; margin-top: -6px; }
   #mediavote-display-screen { padding: 0; }
   .mediavote-filepicker { display: flex; flex-direction: column; align-items: center; gap: 16px; }
   .mediavote-filepicker-title { font-size: clamp(1.4rem, 2.4vw, 2.2rem); color: var(--muted); }
   .mediavote-video { width: 100vw; height: 100vh; object-fit: contain; background: #000; }
+  .mediavote-kaltura-container { width: 100vw; height: 100vh; }
+  .mediavote-error {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(255,91,106,0.15);
+    border: 1px solid var(--danger);
+    color: #ffb3ba;
+    padding: 10px 20px;
+    border-radius: 10px;
+    font-size: clamp(0.9rem, 1.3vw, 1.1rem);
+    max-width: 80vw;
+    text-align: center;
+    z-index: 1000;
+  }
   .idle-test-video-btn { margin-top: 32px; }
+  .video-test-source-row { display: flex; gap: 12px; margin-bottom: 8px; }
 
   /* ---- Standalone playback test — local only, no session/Supabase involved ---- */
   .video-test-overlay {
@@ -447,12 +475,23 @@
 </div>
 
 <div id="video-test-overlay" class="video-test-overlay hidden">
+  <div class="video-test-source-row" id="video-test-source-row">
+    <button type="button" class="display-btn" id="video-test-source-local-btn">Local file</button>
+    <button type="button" class="display-btn ghost" id="video-test-source-mmutube-btn">mmutube video</button>
+  </div>
   <div id="video-test-picker" class="mediavote-filepicker">
     <div class="mediavote-filepicker-title">Pick a clip to test playback</div>
     <button type="button" class="display-btn" id="video-test-pick-btn">Choose file…</button>
     <input type="file" id="video-test-file-fallback" accept="video/*,audio/*" class="hidden">
   </div>
+  <div id="video-test-mmutube-picker" class="mediavote-filepicker hidden">
+    <div class="mediavote-filepicker-title">Paste an mmutube video URL or entry ID</div>
+    <input type="text" id="video-test-mmutube-input" placeholder="e.g. https://mmutube.mmu.ac.uk/media/.../1_rqos2ygb or 1_rqos2ygb">
+    <button type="button" class="display-btn" id="video-test-mmutube-load-btn">Load</button>
+    <div id="video-test-mmutube-error" class="field-error hidden"></div>
+  </div>
   <video id="video-test-el" class="mediavote-video hidden" controls playsinline></video>
+  <div id="video-test-kaltura-container" class="mediavote-kaltura-container hidden"></div>
   <button type="button" class="display-btn ghost video-test-close-btn" id="video-test-close-btn">Close</button>
 </div>
 
@@ -500,6 +539,7 @@
 </div>
 
 <div id="mediavote-display-screen" class="screen hidden">
+  <div id="mediavote-error" class="mediavote-error hidden"></div>
   <div id="mediavote-filepicker" class="mediavote-filepicker">
     <div class="mediavote-filepicker-title">Load the clip for this session</div>
     <button type="button" class="display-btn" id="mediavote-pick-btn">Choose file…</button>
@@ -507,6 +547,7 @@
     <input type="file" id="mediavote-file-fallback" accept="video/*,audio/*" class="hidden">
   </div>
   <video id="mediavote-video" class="mediavote-video hidden" playsinline></video>
+  <div id="mediavote-kaltura-container" class="mediavote-kaltura-container hidden"></div>
 </div>
 
 <script>
@@ -1838,10 +1879,93 @@ async function unlockAutoplay(video) {
   }
 }
 
+// ---------------- Media Vote: mmutube (Kaltura) Dynamic Embed ----------------
+// Deliberately the Dynamic Embed pattern (KalturaPlayer.setup() + a real
+// player object with .play()/.pause()/.currentTime), NOT the iframe-only
+// embed Kaltura's Share -> Embed panel generates by default — that embed
+// type is sandboxed specifically against a JS control API, which would
+// silently break every transport command. partnerId/uiConfId are constant
+// for this MMU account across every video, so they're hardcoded here
+// rather than stored per session — only entryId varies.
+const KALTURA_PARTNER_ID = 1128062;
+const KALTURA_UICONF_ID = 51416912;
+let kalturaScriptPromise = null;
+
+// Loaded once per partnerId/uiConfId pair (i.e. once ever, for this MMU
+// account), not once per session — redundant script loads add up across
+// a term of media-vote sessions.
+function loadKalturaScript() {
+  if (kalturaScriptPromise) return kalturaScriptPromise;
+  kalturaScriptPromise = new Promise((resolve, reject) => {
+    if (window.KalturaPlayer) {
+      resolve();
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = `https://cdnapisec.kaltura.com/p/${KALTURA_PARTNER_ID}/embedPlaykitJs/uiconf_id/${KALTURA_UICONF_ID}`;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Could not load the mmutube player library.'));
+    document.head.appendChild(script);
+  });
+  return kalturaScriptPromise;
+}
+
+// Accepts either a bare Kaltura entry ID (e.g. "1_rqos2ygb") or a full
+// mmutube video URL (e.g. "https://mmutube.mmu.ac.uk/media/greenwin/1_rqos2ygb")
+// and pulls the entry ID from the URL's last path segment.
+function extractKalturaEntryId(input) {
+  const trimmed = (input || '').trim();
+  if (!trimmed) return null;
+  if (/^[0-9]+_[a-z0-9]+$/i.test(trimmed)) return trimmed;
+  try {
+    const url = new URL(trimmed);
+    const segments = url.pathname.split('/').filter(Boolean);
+    const last = segments[segments.length - 1];
+    if (last && /^[0-9]+_[a-z0-9]+$/i.test(last)) return last;
+  } catch (e) {
+    // not a valid URL either
+  }
+  return null;
+}
+
+// Thin adapters over the two possible players (native <video> vs Kaltura's
+// player object) so applyTransportCommand below can stay source-agnostic —
+// same event-handling logic, same media_transport_seq detection, just a
+// different target object executing play()/pause()/currentTime.
+function makeVideoAdapter(video) {
+  return {
+    play: () => video.play().catch(() => {}),
+    pause: () => video.pause(),
+    setCurrentTime: (seconds) => { video.currentTime = seconds; }
+  };
+}
+
+function makeKalturaAdapter(player) {
+  return {
+    play: () => { try { player.play(); } catch (e) {} },
+    pause: () => { try { player.pause(); } catch (e) {} },
+    setCurrentTime: (seconds) => { try { player.currentTime = seconds; } catch (e) {} }
+  };
+}
+
+function showMediaVoteError(message) {
+  const el = document.getElementById('mediavote-error');
+  if (el) {
+    el.textContent = message;
+    el.classList.remove('hidden');
+  }
+}
+
+function hideMediaVoteError() {
+  const el = document.getElementById('mediavote-error');
+  if (el) el.classList.add('hidden');
+}
+
 // ---------------- Media Vote: session-driven display ----------------
 let mediaVoteHandleKey = null;
 let mediaVoteObjectUrl = null;
 let mediaTransportAppliedSeq = null;
+let activeMediaAdapter = null; // set once whichever player (local <video> or Kaltura) is ready
 
 async function loadMediaVoteFile(file) {
   const video = document.getElementById('mediavote-video');
@@ -1854,46 +1978,97 @@ async function loadMediaVoteFile(file) {
 
   await unlockAutoplay(video);
 
+  activeMediaAdapter = makeVideoAdapter(video);
+
   // A transport command may already have been issued before this device
   // loaded (or reloaded) the page — apply the current known state now
-  // that there's finally a clip to apply it to.
+  // that there's finally a player to apply it to.
   mediaTransportAppliedSeq = null;
   if (currentSession) applyTransportCommand(currentSession);
 }
 
+// Kaltura's Dynamic Embed player is purpose-built for remote/programmatic
+// control, so it likely doesn't need the play()-then-pause() autoplay
+// unlock the raw <video> element needs — but that's unverified until
+// tested against a real embed with a remote 'play' command, so it's
+// deliberately not applied here. If audio doesn't play on a remote play
+// command in testing, apply the same unlockAutoplay() mitigation here.
+async function loadMediaVoteKaltura(entryId) {
+  hideMediaVoteError();
+  const container = document.getElementById('mediavote-kaltura-container');
+  document.getElementById('mediavote-filepicker').classList.add('hidden');
+  container.classList.remove('hidden');
+
+  try {
+    await loadKalturaScript();
+    const player = KalturaPlayer.setup({
+      targetId: 'mediavote-kaltura-container',
+      provider: { partnerId: KALTURA_PARTNER_ID, uiConfId: KALTURA_UICONF_ID }
+    });
+    player.loadMedia({ entryId });
+
+    player.addEventListener('error', () => {
+      showMediaVoteError(
+        "Couldn't load or play the mmutube video. If this is unexpected, check that the " +
+        'video\'s privacy on mmutube is set to Public or Unlisted — MMU-Only content requires ' +
+        "an institutional login this display doesn't have."
+      );
+    });
+
+    activeMediaAdapter = makeKalturaAdapter(player);
+    mediaTransportAppliedSeq = null;
+    if (currentSession) applyTransportCommand(currentSession);
+  } catch (e) {
+    showMediaVoteError('Could not load the mmutube player. Check the connection and try reloading.');
+  }
+}
+
 async function initMediaVoteDisplay(session) {
   showScreen('mediavote-display-screen');
-  document.getElementById('mediavote-filepicker').classList.remove('hidden');
-  document.getElementById('mediavote-video').classList.add('hidden');
-  const resumeBtn = document.getElementById('mediavote-resume-btn');
-  resumeBtn.classList.add('hidden');
-
-  mediaVoteHandleKey = `kyomei_mediavote_handle_${session.session_code}`;
+  hideMediaVoteError();
+  activeMediaAdapter = null;
   mediaTransportAppliedSeq = null;
 
-  if (window.showOpenFilePicker) {
-    const savedHandle = await loadFileHandle(mediaVoteHandleKey);
-    if (savedHandle) {
-      resumeBtn.textContent = `Resume ${savedHandle.name}?`;
-      resumeBtn.classList.remove('hidden');
-      resumeBtn.onclick = async () => {
-        const ok = await verifyFileHandlePermission(savedHandle);
-        if (!ok) {
-          resumeBtn.classList.add('hidden');
-          return;
-        }
-        const file = await savedHandle.getFile();
-        await loadMediaVoteFile(file);
-      };
-    }
-  }
+  const isMmutube = session.media_source_type === 'mmutube';
+  document.getElementById('mediavote-filepicker').classList.toggle('hidden', isMmutube);
+  document.getElementById('mediavote-video').classList.add('hidden');
+  document.getElementById('mediavote-kaltura-container').classList.toggle('hidden', !isMmutube);
 
-  document.getElementById('mediavote-pick-btn').onclick = async () => {
-    const result = await pickVideoFile('mediavote-file-fallback');
-    if (!result) return;
-    if (result.handle) await saveFileHandle(mediaVoteHandleKey, result.handle);
-    await loadMediaVoteFile(result.file);
-  };
+  if (isMmutube) {
+    if (session.media_entry_id) {
+      await loadMediaVoteKaltura(session.media_entry_id);
+    } else {
+      showMediaVoteError('This session is set to mmutube but has no video configured.');
+    }
+  } else {
+    const resumeBtn = document.getElementById('mediavote-resume-btn');
+    resumeBtn.classList.add('hidden');
+    mediaVoteHandleKey = `kyomei_mediavote_handle_${session.session_code}`;
+
+    if (window.showOpenFilePicker) {
+      const savedHandle = await loadFileHandle(mediaVoteHandleKey);
+      if (savedHandle) {
+        resumeBtn.textContent = `Resume ${savedHandle.name}?`;
+        resumeBtn.classList.remove('hidden');
+        resumeBtn.onclick = async () => {
+          const ok = await verifyFileHandlePermission(savedHandle);
+          if (!ok) {
+            resumeBtn.classList.add('hidden');
+            return;
+          }
+          const file = await savedHandle.getFile();
+          await loadMediaVoteFile(file);
+        };
+      }
+    }
+
+    document.getElementById('mediavote-pick-btn').onclick = async () => {
+      const result = await pickVideoFile('mediavote-file-fallback');
+      if (!result) return;
+      if (result.handle) await saveFileHandle(mediaVoteHandleKey, result.handle);
+      await loadMediaVoteFile(result.file);
+    };
+  }
 
   setupSessionsSubscription();
 }
@@ -1903,10 +2078,11 @@ async function initMediaVoteDisplay(session) {
 // position. 'seek': snap to the given position without touching play/
 // pause state. Dispatched off media_transport_seq incrementing, not by
 // comparing action/position alone — two different commands can otherwise
-// look identical (e.g. two 'seek 0' restarts in a row).
+// look identical (e.g. two 'seek 0' restarts in a row). Source-agnostic —
+// activeMediaAdapter is whichever player (local <video> or Kaltura) is
+// actually ready.
 function applyTransportCommand(sessionRow) {
-  const video = document.getElementById('mediavote-video');
-  if (!video || !video.src) return; // no clip loaded yet — nothing to drive
+  if (!activeMediaAdapter) return; // no player ready yet — nothing to drive
 
   const seq = sessionRow.media_transport_seq || 0;
   if (seq === mediaTransportAppliedSeq) return;
@@ -1920,26 +2096,54 @@ function applyTransportCommand(sessionRow) {
       ? new Date(sessionRow.media_transport_issued_at).getTime()
       : Date.now();
     const elapsedSeconds = Math.max(0, (Date.now() - issuedAtMs) / 1000);
-    video.currentTime = (positionMs / 1000) + elapsedSeconds;
-    video.play().catch(() => {});
+    activeMediaAdapter.setCurrentTime((positionMs / 1000) + elapsedSeconds);
+    activeMediaAdapter.play();
   } else if (action === 'pause') {
-    video.pause();
-    video.currentTime = positionMs / 1000;
+    activeMediaAdapter.pause();
+    activeMediaAdapter.setCurrentTime(positionMs / 1000);
   } else if (action === 'seek') {
-    video.currentTime = positionMs / 1000;
+    activeMediaAdapter.setCurrentTime(positionMs / 1000);
   }
 }
 
 // ---------------- Standalone playback test mode ----------------
 // Entirely local, no Supabase interaction, no session required — lets the
 // tutor verify a room's playback/audio setup without spinning up a real
-// session. Reuses the same picker (FSA-API-with-fallback) as the
-// session-driven flow above, just wired to its own overlay/video.
+// session. Reuses the same pickers (FSA-API-with-fallback for local,
+// Dynamic Embed for mmutube) as the session-driven flow above, just wired
+// to its own overlay/video.
 let videoTestObjectUrl = null;
+let videoTestKalturaPlayer = null;
+let videoTestSourceType = 'local';
+
+function setVideoTestSource(type) {
+  videoTestSourceType = type;
+  document.getElementById('video-test-source-local-btn').className = type === 'local' ? 'display-btn' : 'display-btn ghost';
+  document.getElementById('video-test-source-mmutube-btn').className = type === 'mmutube' ? 'display-btn' : 'display-btn ghost';
+  document.getElementById('video-test-picker').classList.toggle('hidden', type !== 'local');
+  document.getElementById('video-test-mmutube-picker').classList.toggle('hidden', type !== 'mmutube');
+}
+
+document.getElementById('video-test-source-local-btn').addEventListener('click', () => setVideoTestSource('local'));
+document.getElementById('video-test-source-mmutube-btn').addEventListener('click', () => setVideoTestSource('mmutube'));
+
+function closeVideoTestKalturaPlayer() {
+  if (videoTestKalturaPlayer) {
+    try { videoTestKalturaPlayer.destroy(); } catch (e) {}
+    videoTestKalturaPlayer = null;
+  }
+  const container = document.getElementById('video-test-kaltura-container');
+  container.classList.add('hidden');
+  container.innerHTML = '';
+}
 
 document.getElementById('idle-test-video-btn').addEventListener('click', () => {
-  document.getElementById('video-test-picker').classList.remove('hidden');
+  setVideoTestSource('local');
+  document.getElementById('video-test-source-row').classList.remove('hidden');
   document.getElementById('video-test-el').classList.add('hidden');
+  document.getElementById('video-test-mmutube-input').value = '';
+  document.getElementById('video-test-mmutube-error').classList.add('hidden');
+  closeVideoTestKalturaPlayer();
   document.getElementById('video-test-overlay').classList.remove('hidden');
 });
 
@@ -1952,11 +2156,55 @@ document.getElementById('video-test-pick-btn').addEventListener('click', async (
   videoTestObjectUrl = URL.createObjectURL(result.file);
   video.src = videoTestObjectUrl;
 
+  // Hide the source toggle too — it and the 100vh video together would
+  // otherwise overflow the fixed-position overlay.
+  document.getElementById('video-test-source-row').classList.add('hidden');
   document.getElementById('video-test-picker').classList.add('hidden');
   video.classList.remove('hidden');
 
   await unlockAutoplay(video);
   video.play().catch(() => {});
+});
+
+document.getElementById('video-test-mmutube-load-btn').addEventListener('click', async () => {
+  const input = document.getElementById('video-test-mmutube-input');
+  const errorEl = document.getElementById('video-test-mmutube-error');
+  const entryId = extractKalturaEntryId(input.value);
+  if (!entryId) {
+    errorEl.textContent = 'Enter a valid mmutube video URL or entry ID.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  errorEl.classList.add('hidden');
+
+  const container = document.getElementById('video-test-kaltura-container');
+  document.getElementById('video-test-source-row').classList.add('hidden');
+  document.getElementById('video-test-mmutube-picker').classList.add('hidden');
+  container.classList.remove('hidden');
+
+  try {
+    await loadKalturaScript();
+    videoTestKalturaPlayer = KalturaPlayer.setup({
+      targetId: 'video-test-kaltura-container',
+      provider: { partnerId: KALTURA_PARTNER_ID, uiConfId: KALTURA_UICONF_ID }
+    });
+    videoTestKalturaPlayer.loadMedia({ entryId });
+    videoTestKalturaPlayer.addEventListener('error', () => {
+      errorEl.textContent =
+        "Couldn't play this video. If unexpected, check its privacy on mmutube is Public or " +
+        "Unlisted — MMU-Only content requires a login this display doesn't have.";
+      errorEl.classList.remove('hidden');
+      closeVideoTestKalturaPlayer();
+      document.getElementById('video-test-source-row').classList.remove('hidden');
+      document.getElementById('video-test-mmutube-picker').classList.remove('hidden');
+    });
+  } catch (e) {
+    errorEl.textContent = 'Could not load the mmutube player. Check the connection and try again.';
+    errorEl.classList.remove('hidden');
+    closeVideoTestKalturaPlayer();
+    document.getElementById('video-test-source-row').classList.remove('hidden');
+    document.getElementById('video-test-mmutube-picker').classList.remove('hidden');
+  }
 });
 
 document.getElementById('video-test-close-btn').addEventListener('click', () => {
@@ -1967,6 +2215,8 @@ document.getElementById('video-test-close-btn').addEventListener('click', () => 
     URL.revokeObjectURL(videoTestObjectUrl);
     videoTestObjectUrl = null;
   }
+  video.classList.add('hidden');
+  closeVideoTestKalturaPlayer();
   document.getElementById('video-test-overlay').classList.add('hidden');
 });
 

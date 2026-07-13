@@ -563,6 +563,19 @@
             </label>
           </div>
           <div id="quicktap-error" class="field-error hidden"></div>
+
+          <div id="mediavote-source-group" class="hidden">
+            <label class="field-subheading">Video source</label>
+            <div class="mode-toggle">
+              <button type="button" class="active" id="mediavote-source-local-btn">Local file</button>
+              <button type="button" id="mediavote-source-mmutube-btn">mmutube video</button>
+            </div>
+            <div id="mediavote-entry-field" class="hidden">
+              <label for="new-mediavote-entry-input">mmutube video URL or entry ID</label>
+              <input id="new-mediavote-entry-input" type="text" placeholder="e.g. https://mmutube.mmu.ac.uk/media/.../1_rqos2ygb or 1_rqos2ygb">
+              <div id="mediavote-entry-error" class="field-error hidden"></div>
+            </div>
+          </div>
         </div>
         <div class="field hidden" id="textmarkup-field">
           <label for="new-textmarkup-passage">Passage</label>
@@ -1047,6 +1060,36 @@ let newQuickTapOptions = [];
 let newTextMarkupPrompts = [];
 let newSessionMode = 'text';
 let selectedQuickTapColor = QUICKTAP_PALETTE[0];
+let newMediaVoteSourceType = 'local';
+
+// Accepts either a bare Kaltura entry ID (e.g. "1_rqos2ygb") or a full
+// mmutube video URL (e.g. "https://mmutube.mmu.ac.uk/media/greenwin/1_rqos2ygb")
+// and pulls the entry ID out of the URL's last path segment — no need to
+// visit Share -> Embed, the ID is visible directly in the page URL.
+function extractKalturaEntryId(input) {
+  const trimmed = (input || '').trim();
+  if (!trimmed) return null;
+  if (/^[0-9]+_[a-z0-9]+$/i.test(trimmed)) return trimmed;
+  try {
+    const url = new URL(trimmed);
+    const segments = url.pathname.split('/').filter(Boolean);
+    const last = segments[segments.length - 1];
+    if (last && /^[0-9]+_[a-z0-9]+$/i.test(last)) return last;
+  } catch (e) {
+    // not a valid URL either
+  }
+  return null;
+}
+
+function setNewMediaVoteSourceType(type) {
+  newMediaVoteSourceType = type;
+  document.getElementById('mediavote-source-local-btn').classList.toggle('active', type === 'local');
+  document.getElementById('mediavote-source-mmutube-btn').classList.toggle('active', type === 'mmutube');
+  document.getElementById('mediavote-entry-field').classList.toggle('hidden', type !== 'mmutube');
+}
+
+document.getElementById('mediavote-source-local-btn').addEventListener('click', () => setNewMediaVoteSourceType('local'));
+document.getElementById('mediavote-source-mmutube-btn').addEventListener('click', () => setNewMediaVoteSourceType('mmutube'));
 
 function setNewSessionMode(mode) {
   newSessionMode = mode;
@@ -1062,6 +1105,7 @@ function setNewSessionMode(mode) {
   document.getElementById('quicktap-field').classList.toggle('hidden', mode !== 'quicktap' && mode !== 'mediavote');
   document.getElementById('quicktap-heading-group').classList.toggle('hidden', mode === 'mediavote');
   document.getElementById('quicktap-one-vote-group').classList.toggle('hidden', mode === 'mediavote');
+  document.getElementById('mediavote-source-group').classList.toggle('hidden', mode !== 'mediavote');
   document.getElementById('quicktap-options-label').textContent =
     mode === 'mediavote' ? 'Vote options (2–10)' : 'Quick-tap options (2–10)';
   document.getElementById('textmarkup-field').classList.toggle('hidden', mode !== 'textmarkup');
@@ -1080,12 +1124,14 @@ function resetNewSessionForm() {
   document.getElementById('new-quicktap-heading').value = '';
   document.getElementById('new-textmarkup-passage').value = '';
   document.getElementById('new-textmarkup-prompt-input').value = '';
+  document.getElementById('new-mediavote-entry-input').value = '';
   document.getElementById('code-error').classList.add('hidden');
   document.getElementById('category-error').classList.add('hidden');
   document.getElementById('quicktap-error').classList.add('hidden');
   document.getElementById('quicktap-heading-error').classList.add('hidden');
   document.getElementById('textmarkup-passage-error').classList.add('hidden');
   document.getElementById('textmarkup-prompt-error').classList.add('hidden');
+  document.getElementById('mediavote-entry-error').classList.add('hidden');
   document.getElementById('new-one-vote-checkbox').checked = false;
   document.getElementById('new-guided-checkbox').checked = false;
   newCategories = [];
@@ -1097,6 +1143,7 @@ function resetNewSessionForm() {
   renderColorPicker();
   renderTextMarkupPromptChips();
   setNewSessionMode('text');
+  setNewMediaVoteSourceType('local');
 }
 
 function renderCategoryChips() {
@@ -1291,6 +1338,8 @@ document.getElementById('create-session-btn').addEventListener('click', async ()
   const textmarkupPassageError = document.getElementById('textmarkup-passage-error');
   const textmarkupPromptError = document.getElementById('textmarkup-prompt-error');
   const textmarkupPassage = document.getElementById('new-textmarkup-passage').value.trim();
+  const mediaEntryError = document.getElementById('mediavote-entry-error');
+  let mediaEntryId = null;
 
   let hasError = false;
   if (!name) {
@@ -1339,6 +1388,16 @@ document.getElementById('create-session-btn').addEventListener('click', async ()
     } else {
       quicktapError.classList.add('hidden');
     }
+    if (newMediaVoteSourceType === 'mmutube') {
+      mediaEntryId = extractKalturaEntryId(document.getElementById('new-mediavote-entry-input').value);
+      if (!mediaEntryId) {
+        mediaEntryError.textContent = 'Enter a valid mmutube video URL or entry ID.';
+        mediaEntryError.classList.remove('hidden');
+        hasError = true;
+      } else {
+        mediaEntryError.classList.add('hidden');
+      }
+    }
   } else if (newSessionMode === 'textmarkup') {
     if (!textmarkupPassage) {
       textmarkupPassageError.textContent = 'Add the passage text.';
@@ -1375,7 +1434,9 @@ document.getElementById('create-session-btn').addEventListener('click', async ()
       quick_tap_heading: newSessionMode === 'quicktap' ? quicktapHeading : null,
       text_markup_enabled: newSessionMode === 'textmarkup',
       passage_text: newSessionMode === 'textmarkup' ? textmarkupPassage : null,
-      media_vote_enabled: newSessionMode === 'mediavote'
+      media_vote_enabled: newSessionMode === 'mediavote',
+      media_source_type: newSessionMode === 'mediavote' ? newMediaVoteSourceType : null,
+      media_entry_id: (newSessionMode === 'mediavote' && newMediaVoteSourceType === 'mmutube') ? mediaEntryId : null
     })
     .select()
     .single();
@@ -2235,7 +2296,7 @@ function updateModeBadge() {
     const n = textMarkupPrompts.length;
     badge.textContent = `Text markup · ${n} prompt${n === 1 ? '' : 's'}`;
   } else if (isMediaVote) {
-    badge.textContent = 'Media vote';
+    badge.textContent = currentSession.media_source_type === 'mmutube' ? 'Media vote · mmutube' : 'Media vote';
   } else if (isGuided) {
     const n = guidedCategories.length;
     badge.textContent = `Guided · ${n} categor${n === 1 ? 'y' : 'ies'}`;
