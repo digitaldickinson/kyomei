@@ -8,11 +8,33 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. `friction_pool_schema.sql` is not tracked in git, so any entry that changed the schema is flagged (**schema**) as a reminder to re-run it against Supabase.
 
-**Current version: 1.7.2**
+**Current version: 2.0.0**
 
 ---
 
 ## Log
+
+### 2.0.0 — 2026-08-04 — **schema**
+Running Order — sixth session type. A tutor authors story headlines (with optional synopses);
+physical groups each claim a team name on one device (the "editor") and reorder the stories into
+a running order via up/down buttons, no drag. The tutor reveals either one team's final order or
+a room-wide aggregate (average final position, plus two equal-weight oscillation views — raw move
+count per item and pairwise reversal count — both derived from an append-only move log). Pre-reveal,
+the projected display shows nothing about team progress, not even a count; that live count is
+admin-only. New tables: `ranking_items`, `ranking_teams` (with a `superseded` flag closing a
+reclaim race — a backgrounded-then-resumed device can't write against a team name someone else has
+since reclaimed), `ranking_moves`, `ranking_submissions`; three new `plpgsql` RPCs (a first for this
+schema — every prior RPC was plain SQL) handling claim/move/submit with server-side validation of
+ownership, reveal state, and full-coverage `final_order`. Jumps ahead of the previously-planned
+Threaded Conversation build (now next up, v2.1.0). Deliberate scope cut from the original concept
+brief: only the ranking mechanic and the oscillation diagnostic ship — no student-facing question
+capture (second-swap prompts, closing questions, a question wall) at all in this pass.
+
+### 1.7.3 — 2026-07-31
+Added `OPERATORS_MANUAL.md` — a tutor-facing operator's manual covering login, session creation
+per mode (including Pulse Check), running a session (join info, guided/prompt reveal, feed
+moderation, reveal/chart-cycling, Media Vote transport), reset/archive/delete, and the L/G/Space
+keyboard shortcuts.
 
 ### 1.7.2 — 2026-07-13
 Fixed a Text Markup display bug: revealing results then hiding them again left the previously-rendered heatmap/community view visible underneath the "Collecting responses…" status, because `applyTextMarkupChartTypeVisibility()` in kyomei-display.html only gated visibility on the selected chart type, not on `resultsRevealed`. Admin didn't have this bug — its equivalent containers sit inside a parent that's hidden directly on toggle.

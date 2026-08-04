@@ -242,6 +242,58 @@
     width: 100%;
   }
   .secondary-btn:active { background: var(--panel-2); }
+
+  .field input[type="text"] {
+    font-family: inherit;
+    background: var(--panel-2);
+    border: 2px solid var(--border);
+    color: var(--text);
+    border-radius: 10px;
+    padding: 14px;
+    font-size: 17px;
+    width: 100%;
+  }
+  .field input[type="text"]:focus { outline: none; border-color: var(--accent); }
+
+  .ranking-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+  .ranking-item {
+    background: var(--panel-2);
+    border: 2px solid var(--border);
+    border-radius: 14px;
+    padding: 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .ranking-item-position {
+    font-size: 18px;
+    font-weight: 800;
+    color: var(--muted);
+    min-width: 22px;
+  }
+  .ranking-item-text { flex: 1; min-width: 0; }
+  .ranking-item-label { font-size: 16px; font-weight: 700; }
+  .ranking-item-synopsis { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .ranking-item-controls { display: flex; flex-direction: column; gap: 6px; }
+  .ranking-move-btn {
+    font-family: inherit;
+    background: var(--panel);
+    border: 2px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    width: 36px;
+    height: 32px;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .ranking-move-btn:active { filter: brightness(1.15); }
+  .ranking-move-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -353,6 +405,32 @@
     <div class="tap-grid" id="mediavote-tap-grid"></div>
   </div>
 
+  <div id="runningorder-screen" class="hidden">
+    <h1>kyomei</h1>
+    <div class="subtitle">Reorder the stories into a running order.</div>
+
+    <div class="session-name-header">Session: <strong id="runningorder-session-name-display"></strong></div>
+
+    <div id="runningorder-error-banner" class="status-banner error hidden"></div>
+
+    <div id="runningorder-join-form">
+      <div class="field">
+        <label for="runningorder-team-name-input">Team name</label>
+        <input id="runningorder-team-name-input" type="text" placeholder="e.g. Newsroom 3" autocomplete="off">
+      </div>
+      <button class="submit-btn" type="button" id="runningorder-claim-btn">Join as this team</button>
+    </div>
+
+    <div id="runningorder-ranking-form" class="hidden">
+      <div class="ranking-list" id="ranking-list"></div>
+      <button class="submit-btn" type="button" id="runningorder-submit-btn">Submit final order</button>
+    </div>
+
+    <div id="runningorder-submitted-status" class="hidden-status hidden">Submitted! Waiting for your tutor.</div>
+    <div id="runningorder-closed-status" class="hidden-status hidden">Your tutor has revealed results — submission is now closed.</div>
+    <div id="runningorder-superseded-status" class="hidden-status hidden">Another device took over this team name while this one was inactive.</div>
+  </div>
+
 </div>
 
 <script>
@@ -383,7 +461,7 @@ let currentSession = null;
 let currentCategories = [];
 
 function showScreen(id) {
-  ['loading-screen', 'invalid-session-screen', 'form-screen', 'quicktap-screen', 'guided-screen', 'textmarkup-screen', 'mediavote-screen'].forEach(s => {
+  ['loading-screen', 'invalid-session-screen', 'form-screen', 'quicktap-screen', 'guided-screen', 'textmarkup-screen', 'mediavote-screen', 'runningorder-screen'].forEach(s => {
     document.getElementById(s).classList.toggle('hidden', s !== id);
   });
 }
@@ -410,7 +488,9 @@ async function init() {
 
   currentSession = session;
 
-  if (session.quick_tap_enabled) {
+  if (session.running_order_enabled) {
+    await initRunningOrder(session);
+  } else if (session.quick_tap_enabled) {
     await initQuickTap(session);
   } else if (session.text_markup_enabled) {
     await initTextMarkup(session);
@@ -1252,6 +1332,195 @@ async function handleMediaVoteTap(optionId) {
     successBanner.classList.add('hidden');
   }, 1500);
 }
+
+// ---------------- Running Order ----------------
+let rankingTeamId = null;
+let rankingOrder = []; // ranking_items rows, in the team's current local order
+let rankingSubmitted = false;
+
+async function initRunningOrder(session) {
+  document.getElementById('runningorder-session-name-display').textContent = session.name;
+
+  const { data: items, error: itemsError } = await supabaseClient
+    .from('ranking_items')
+    .select('*')
+    .eq('session_id', session.id)
+    .order('sort_order', { ascending: true });
+
+  if (itemsError) {
+    showScreen('invalid-session-screen');
+    return;
+  }
+  rankingOrder = items || [];
+
+  // Tab-refresh case: resume an existing claim by device_id rather than
+  // asking to re-enter a team name. A refresh before submit still loses
+  // the in-progress local order — deliberately, per the build's scope —
+  // so this always resumes from the original unordered state, not
+  // whatever position the team had reached.
+  const { data: existingTeams } = await supabaseClient.rpc('get_own_ranking_team', {
+    p_session_id: session.id,
+    p_device_id: deviceId
+  });
+
+  showScreen('runningorder-screen');
+
+  if (existingTeams && existingTeams.length > 0) {
+    rankingTeamId = existingTeams[0].id;
+    showRunningOrderRankingForm();
+  } else {
+    document.getElementById('runningorder-join-form').classList.remove('hidden');
+    document.getElementById('runningorder-ranking-form').classList.add('hidden');
+  }
+}
+
+document.getElementById('runningorder-claim-btn').addEventListener('click', async () => {
+  const input = document.getElementById('runningorder-team-name-input');
+  const errorBanner = document.getElementById('runningorder-error-banner');
+  const teamName = input.value.trim();
+  errorBanner.classList.add('hidden');
+
+  if (!teamName) {
+    errorBanner.textContent = 'Enter a team name.';
+    errorBanner.classList.remove('hidden');
+    return;
+  }
+
+  const btn = document.getElementById('runningorder-claim-btn');
+  btn.disabled = true;
+
+  const { data, error } = await supabaseClient.rpc('claim_ranking_team', {
+    p_session_id: currentSession.id,
+    p_team_name: teamName,
+    p_device_id: deviceId
+  });
+
+  btn.disabled = false;
+
+  if (error) {
+    if (error.message === 'TEAM_NAME_TAKEN') {
+      errorBanner.textContent = "That name's already taken — try a different one.";
+    } else {
+      errorBanner.textContent = 'Could not join — check your connection and try again.';
+    }
+    errorBanner.classList.remove('hidden');
+    return;
+  }
+
+  rankingTeamId = data.id;
+  showRunningOrderRankingForm();
+});
+
+function showRunningOrderRankingForm() {
+  document.getElementById('runningorder-join-form').classList.add('hidden');
+  document.getElementById('runningorder-ranking-form').classList.remove('hidden');
+  renderRankingOrder();
+}
+
+function renderRankingOrder() {
+  const listEl = document.getElementById('ranking-list');
+  listEl.innerHTML = '';
+  rankingOrder.forEach((item, idx) => {
+    const row = document.createElement('div');
+    row.className = 'ranking-item';
+
+    const synopsisHtml = item.synopsis
+      ? `<div class="ranking-item-synopsis">${escapeHtml(item.synopsis)}</div>`
+      : '';
+    row.innerHTML = `
+      <div class="ranking-item-position">${idx + 1}</div>
+      <div class="ranking-item-text">
+        <div class="ranking-item-label">${escapeHtml(item.label)}</div>
+        ${synopsisHtml}
+      </div>
+      <div class="ranking-item-controls">
+        <button class="ranking-move-btn" type="button" data-dir="-1" ${idx === 0 ? 'disabled' : ''}>&uarr;</button>
+        <button class="ranking-move-btn" type="button" data-dir="1" ${idx === rankingOrder.length - 1 ? 'disabled' : ''}>&darr;</button>
+      </div>
+    `;
+    row.querySelectorAll('.ranking-move-btn').forEach(btn => {
+      btn.addEventListener('click', () => moveRankingItem(idx, Number(btn.dataset.dir)));
+    });
+    listEl.appendChild(row);
+  });
+}
+
+function moveRankingItem(index, direction) {
+  const otherIndex = index + direction;
+  if (otherIndex < 0 || otherIndex >= rankingOrder.length) return;
+
+  const movedItem = rankingOrder[index];
+  const swappedItem = rankingOrder[otherIndex];
+
+  rankingOrder[index] = swappedItem;
+  rankingOrder[otherIndex] = movedItem;
+  renderRankingOrder();
+
+  // Fire-and-forget — the button press already updated local state above,
+  // so the student's own experience never waits on this. A dropped move
+  // only affects the tutor-facing oscillation diagnostic, not the team's
+  // ranking, so any error here (other than TEAM_SUPERSEDED) is just logged.
+  supabaseClient.rpc('record_ranking_move', {
+    p_session_id: currentSession.id,
+    p_team_id: rankingTeamId,
+    p_device_id: deviceId,
+    p_moved_item_id: movedItem.id,
+    p_swapped_with_item_id: swappedItem.id
+  }).then(({ error }) => {
+    if (error && error.message === 'TEAM_SUPERSEDED') {
+      showRunningOrderSuperseded();
+    } else if (error) {
+      console.error('record_ranking_move failed:', error.message);
+    }
+  });
+}
+
+function showRunningOrderSuperseded() {
+  document.getElementById('runningorder-join-form').classList.add('hidden');
+  document.getElementById('runningorder-ranking-form').classList.add('hidden');
+  document.getElementById('runningorder-submitted-status').classList.add('hidden');
+  document.getElementById('runningorder-closed-status').classList.add('hidden');
+  document.getElementById('runningorder-superseded-status').classList.remove('hidden');
+}
+
+document.getElementById('runningorder-submit-btn').addEventListener('click', async () => {
+  if (rankingSubmitted) return;
+  const errorBanner = document.getElementById('runningorder-error-banner');
+  errorBanner.classList.add('hidden');
+
+  const btn = document.getElementById('runningorder-submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Submitting…';
+
+  const { error } = await supabaseClient.rpc('submit_ranking_order', {
+    p_session_id: currentSession.id,
+    p_team_id: rankingTeamId,
+    p_device_id: deviceId,
+    p_final_order: rankingOrder.map(item => item.id)
+  });
+
+  btn.disabled = false;
+  btn.textContent = 'Submit final order';
+
+  if (error) {
+    if (error.message === 'TEAM_SUPERSEDED') {
+      showRunningOrderSuperseded();
+      return;
+    }
+    if (error.message === 'SESSION_REVEALED') {
+      document.getElementById('runningorder-ranking-form').classList.add('hidden');
+      document.getElementById('runningorder-closed-status').classList.remove('hidden');
+      return;
+    }
+    errorBanner.textContent = 'Could not submit — check your connection and try again.';
+    errorBanner.classList.remove('hidden');
+    return;
+  }
+
+  rankingSubmitted = true;
+  document.getElementById('runningorder-ranking-form').classList.add('hidden');
+  document.getElementById('runningorder-submitted-status').classList.remove('hidden');
+});
 
 init();
 </script>

@@ -557,6 +557,7 @@
             <button type="button" id="mode-quicktap-btn">Quick-tap buttons</button>
             <button type="button" id="mode-textmarkup-btn">Text markup</button>
             <button type="button" id="mode-mediavote-btn">Media Vote</button>
+            <button type="button" id="mode-runningorder-btn">Running Order</button>
           </div>
         </div>
         <div class="field" id="categories-field">
@@ -719,6 +720,31 @@
         </div>
       </div>
 
+      <div id="runningorder-panel" class="hidden">
+        <div class="panel">
+          <label class="field-subheading">Story items</label>
+          <div class="category-list" id="rankingitem-list"></div>
+          <div class="add-cat-row">
+            <input id="new-rankingitem-headline-input" type="text" placeholder="Headline">
+            <button class="ghost" id="add-rankingitem-btn">+ Add</button>
+          </div>
+          <input id="new-rankingitem-synopsis-input" type="text" placeholder="Synopsis (optional)" class="rankingitem-synopsis-input">
+          <div id="rankingitem-error" class="field-error hidden"></div>
+        </div>
+        <div class="panel" id="runningorder-activity-panel">
+          <div class="mediavote-count-label">Team activity</div>
+          <div id="runningorder-activity-summary" class="muted">No teams yet</div>
+          <button class="ghost" type="button" id="runningorder-reveal-toggle-btn">Reveal results</button>
+        </div>
+        <div id="runningorder-view-controls" class="hidden">
+          <label for="runningorder-team-select">View a team's final order</label>
+          <select id="runningorder-team-select">
+            <option value="">Select a team…</option>
+          </select>
+          <button class="ghost" type="button" id="runningorder-aggregate-btn">Aggregate view</button>
+        </div>
+      </div>
+
       <h2 id="results-heading">Live feed</h2>
       <div id="feed-view-mode-indicator" class="feed-view-mode-indicator hidden">Grouped by category (press G to toggle)</div>
       <div id="feed" class="feed"></div>
@@ -854,12 +880,18 @@ function showListScreen() {
   teardownTextMarkupSubscription();
   teardownMediaVoteSubscription();
   teardownMediaSessionRowSubscription();
+  teardownRunningOrderSubscription();
   stopMediaVotePositionTicker();
   document.getElementById('connection-banner').classList.add('hidden');
   guidedCategories = [];
   activeCategoryId = null;
   textMarkupPrompts = [];
   activePromptId = null;
+  rankingItems = [];
+  rankingTeams = [];
+  rankingSubmissions = [];
+  activeRankingTeamId = null;
+  rankingViewMode = null;
   joinInfoShown = false;
   loadSessionList();
 }
@@ -1193,6 +1225,7 @@ function setNewSessionMode(mode) {
   document.getElementById('mode-quicktap-btn').classList.toggle('active', mode === 'quicktap');
   document.getElementById('mode-textmarkup-btn').classList.toggle('active', mode === 'textmarkup');
   document.getElementById('mode-mediavote-btn').classList.toggle('active', mode === 'mediavote');
+  document.getElementById('mode-runningorder-btn').classList.toggle('active', mode === 'runningorder');
   document.getElementById('categories-field').classList.toggle('hidden', mode !== 'text');
   // Media Vote reuses this exact field — same options list, same add/
   // remove/colour component, writing to the same quick_tap_options table —
@@ -1211,6 +1244,7 @@ document.getElementById('mode-text-btn').addEventListener('click', () => setNewS
 document.getElementById('mode-quicktap-btn').addEventListener('click', () => setNewSessionMode('quicktap'));
 document.getElementById('mode-textmarkup-btn').addEventListener('click', () => setNewSessionMode('textmarkup'));
 document.getElementById('mode-mediavote-btn').addEventListener('click', () => setNewSessionMode('mediavote'));
+document.getElementById('mode-runningorder-btn').addEventListener('click', () => setNewSessionMode('runningorder'));
 
 function resetNewSessionForm() {
   document.getElementById('new-session-name').value = '';
@@ -1549,7 +1583,8 @@ document.getElementById('create-session-btn').addEventListener('click', async ()
       passage_locale: newSessionMode === 'textmarkup' ? textmarkupLocale : 'en',
       media_vote_enabled: newSessionMode === 'mediavote',
       media_source_type: newSessionMode === 'mediavote' ? newMediaVoteSourceType : null,
-      media_entry_id: (newSessionMode === 'mediavote' && newMediaVoteSourceType === 'mmutube') ? mediaEntryId : null
+      media_entry_id: (newSessionMode === 'mediavote' && newMediaVoteSourceType === 'mmutube') ? mediaEntryId : null,
+      running_order_enabled: newSessionMode === 'runningorder'
     })
     .select()
     .single();
@@ -1599,6 +1634,10 @@ document.getElementById('create-session-btn').addEventListener('click', async ()
       showError('Session created, but prompts failed to save: ' + promptError.message);
       return;
     }
+  } else if (newSessionMode === 'runningorder') {
+    // No creation-time insert — story items are authored one at a time in
+    // the live session view, not accumulated in this form.
+    btn.disabled = false;
   } else {
     const optionRows = newQuickTapOptions.map((opt, idx) => ({
       session_id: session.id,
@@ -1632,20 +1671,28 @@ let joinInfoShown = false;
 
 function updateRevealUI() {
   const toggleBtn = document.getElementById('reveal-toggle-btn');
+  const runningOrderToggleBtn = document.getElementById('runningorder-reveal-toggle-btn');
   const hiddenStatus = document.getElementById('results-hidden-status');
   const grid = document.getElementById('tally-grid');
   const tmCount = document.getElementById('textmarkup-count-display');
   const mvTimeline = document.getElementById('mediavote-timeline-display');
 
   toggleBtn.textContent = resultsRevealed ? 'Hide results' : 'Reveal results';
+  runningOrderToggleBtn.textContent = resultsRevealed ? 'Hide results' : 'Reveal results';
+  // Running Order has its own reveal button inside runningorder-panel, so
+  // this shared "Collecting votes…" status (which reads oddly for a
+  // non-voting session type anyway) stays hidden for it regardless of
+  // resultsRevealed — the isRunningOrder branch below re-forces this after
+  // the generic toggle.
   hiddenStatus.classList.toggle('hidden', resultsRevealed);
 
   // Shared toggle button/state, but only one of the three "revealed
   // content" containers is ever relevant per session — route to whichever
   // applies rather than letting all of them react to the same
   // resultsRevealed flip.
-  const isTextMarkup = !!(currentSession && !currentSession.quick_tap_enabled && currentSession.text_markup_enabled);
-  const isMediaVote = !!(currentSession && !currentSession.quick_tap_enabled && !currentSession.text_markup_enabled && currentSession.media_vote_enabled);
+  const isTextMarkup = !!(currentSession && !currentSession.quick_tap_enabled && !currentSession.running_order_enabled && currentSession.text_markup_enabled);
+  const isMediaVote = !!(currentSession && !currentSession.quick_tap_enabled && !currentSession.text_markup_enabled && !currentSession.running_order_enabled && currentSession.media_vote_enabled);
+  const isRunningOrder = !!(currentSession && currentSession.running_order_enabled);
   if (isTextMarkup) {
     grid.classList.add('hidden');
     mvTimeline.classList.add('hidden');
@@ -1661,6 +1708,12 @@ function updateRevealUI() {
     grid.classList.add('hidden');
     tmCount.classList.add('hidden');
     mvTimeline.classList.toggle('hidden', !resultsRevealed);
+  } else if (isRunningOrder) {
+    grid.classList.add('hidden');
+    tmCount.classList.add('hidden');
+    mvTimeline.classList.add('hidden');
+    hiddenStatus.classList.add('hidden');
+    renderRunningOrderViewControls();
   } else {
     grid.classList.toggle('hidden', !resultsRevealed);
     tmCount.classList.add('hidden');
@@ -1668,7 +1721,11 @@ function updateRevealUI() {
   }
 }
 
-document.getElementById('reveal-toggle-btn').addEventListener('click', async () => {
+// Shared by reveal-toggle-btn (quicktap/textmarkup/mediavote) and
+// runningorder-reveal-toggle-btn — two buttons because Running Order's
+// panel is otherwise fully self-contained (no shared feed/tally UI), but
+// one function so the toggle/rollback logic can't drift between them.
+async function toggleResultsRevealed() {
   const previous = resultsRevealed;
   resultsRevealed = !resultsRevealed;
   updateRevealUI();
@@ -1686,7 +1743,10 @@ document.getElementById('reveal-toggle-btn').addEventListener('click', async () 
   }
 
   currentSession.results_revealed = resultsRevealed;
-});
+}
+
+document.getElementById('reveal-toggle-btn').addEventListener('click', toggleResultsRevealed);
+document.getElementById('runningorder-reveal-toggle-btn').addEventListener('click', toggleResultsRevealed);
 
 // ---------------- Join-info overlay (L key, admin-triggered) ----------------
 function updateJoinInfoBadge() {
@@ -2813,16 +2873,17 @@ async function enterSession(session) {
   joinInfoShown = !!session.show_join_info;
   updateJoinInfoBadge();
 
-  const isQuickTap = !!session.quick_tap_enabled;
-  const isTextMarkup = !isQuickTap && !!session.text_markup_enabled;
-  const isMediaVote = !isQuickTap && !isTextMarkup && !!session.media_vote_enabled;
-  const isGuided = !isQuickTap && !isTextMarkup && !isMediaVote && !!session.guided_categories;
+  const isRunningOrder = !!session.running_order_enabled;
+  const isQuickTap = !isRunningOrder && !!session.quick_tap_enabled;
+  const isTextMarkup = !isRunningOrder && !isQuickTap && !!session.text_markup_enabled;
+  const isMediaVote = !isRunningOrder && !isQuickTap && !isTextMarkup && !!session.media_vote_enabled;
+  const isGuided = !isRunningOrder && !isQuickTap && !isTextMarkup && !isMediaVote && !!session.guided_categories;
 
   // feed_grouped only ever applies to plain (non-guided, non-quicktap,
-  // non-textmarkup, non-mediavote) text-response sessions — text markup and
-  // media vote have no friction_pool-based feed at all, same restriction as
-  // the g-key guard.
-  const feedGroupedApplies = !isQuickTap && !isTextMarkup && !isMediaVote && !isGuided;
+  // non-textmarkup, non-mediavote, non-runningorder) text-response sessions
+  // — text markup, media vote, and running order have no friction_pool-
+  // based feed at all, same restriction as the g-key guard.
+  const feedGroupedApplies = !isRunningOrder && !isQuickTap && !isTextMarkup && !isMediaVote && !isGuided;
   feedViewMode = (feedGroupedApplies && session.feed_grouped) ? 'grouped' : 'chronological';
   plainFeedCategories = null;
   if (feedViewMode === 'grouped') {
@@ -2832,11 +2893,12 @@ async function enterSession(session) {
 
   document.getElementById('results-heading').textContent =
     isQuickTap ? 'Live results' : (isTextMarkup ? 'Text markup responses' : 'Live feed');
-  document.getElementById('results-heading').classList.toggle('hidden', isMediaVote);
+  document.getElementById('results-heading').classList.toggle('hidden', isMediaVote || isRunningOrder);
   document.getElementById('quicktap-results-controls').classList.toggle('hidden', !(isQuickTap || isTextMarkup || isMediaVote));
   document.getElementById('guided-category-picker').classList.toggle('hidden', !isGuided);
   document.getElementById('textmarkup-prompt-picker').classList.toggle('hidden', !isTextMarkup);
   document.getElementById('mediavote-panel').classList.toggle('hidden', !isMediaVote);
+  document.getElementById('runningorder-panel').classList.toggle('hidden', !isRunningOrder);
 
   const headingEl = document.getElementById('quicktap-heading-display');
   if (isQuickTap && session.quick_tap_heading) {
@@ -2846,7 +2908,26 @@ async function enterSession(session) {
     headingEl.classList.add('hidden');
   }
 
-  if (isQuickTap) {
+  if (isRunningOrder) {
+    document.getElementById('feed').classList.add('hidden');
+    document.getElementById('feed-empty').classList.add('hidden');
+    document.getElementById('guided-waiting-status').classList.add('hidden');
+    document.getElementById('textmarkup-waiting-status').classList.add('hidden');
+    document.getElementById('results-hidden-status').classList.add('hidden');
+    document.getElementById('tally-grid').classList.add('hidden');
+
+    await loadRankingItems();
+    renderRankingItemList();
+    await loadRankingTeamsAndSubmissions();
+    renderRunningOrderActivity();
+
+    activeRankingTeamId = session.active_ranking_team_id || null;
+    rankingViewMode = session.ranking_view_mode || null;
+
+    resultsRevealed = !!session.results_revealed;
+    updateRevealUI();
+    setupRunningOrderSubscription();
+  } else if (isQuickTap) {
     document.getElementById('feed').classList.add('hidden');
     document.getElementById('feed-empty').classList.add('hidden');
     document.getElementById('guided-waiting-status').classList.add('hidden');
@@ -2949,12 +3030,16 @@ async function enterSession(session) {
 
 function updateModeBadge() {
   const badge = document.getElementById('session-mode-badge');
-  const isQuickTap = !!currentSession.quick_tap_enabled;
-  const isTextMarkup = !isQuickTap && !!currentSession.text_markup_enabled;
-  const isMediaVote = !isQuickTap && !isTextMarkup && !!currentSession.media_vote_enabled;
-  const isGuided = !isQuickTap && !isTextMarkup && !isMediaVote && !!currentSession.guided_categories;
+  const isRunningOrder = !!currentSession.running_order_enabled;
+  const isQuickTap = !isRunningOrder && !!currentSession.quick_tap_enabled;
+  const isTextMarkup = !isRunningOrder && !isQuickTap && !!currentSession.text_markup_enabled;
+  const isMediaVote = !isRunningOrder && !isQuickTap && !isTextMarkup && !!currentSession.media_vote_enabled;
+  const isGuided = !isRunningOrder && !isQuickTap && !isTextMarkup && !isMediaVote && !!currentSession.guided_categories;
 
-  if (isQuickTap) {
+  if (isRunningOrder) {
+    const n = rankingItems.length;
+    badge.textContent = `Running order · ${n} item${n === 1 ? '' : 's'}`;
+  } else if (isQuickTap) {
     badge.textContent = currentSession.one_vote_per_device
       ? 'Quick-tap · one vote per device'
       : 'Quick-tap';
@@ -2991,6 +3076,10 @@ document.getElementById('refresh-session-btn').addEventListener('click', async (
     await loadTextMarkupAggregate();
   } else if (currentSession.media_vote_enabled) {
     await loadMediaVoteCount();
+  } else if (currentSession.running_order_enabled) {
+    await loadRankingTeamsAndSubmissions();
+    renderRunningOrderActivity();
+    renderRunningOrderViewControls();
   } else {
     await loadInitialFeed();
   }
@@ -2998,6 +3087,304 @@ document.getElementById('refresh-session-btn').addEventListener('click', async (
   btn.disabled = false;
   btn.textContent = originalText;
 });
+
+// ---------------- Running Order mode ----------------
+let rankingItems = [];
+let rankingTeams = [];
+let rankingSubmissions = [];
+let activeRankingTeamId = null;
+let rankingViewMode = null;
+let runningOrderChannel = null;
+let runningOrderReconnectTimer = null;
+
+async function loadRankingItems() {
+  const { data, error } = await supabaseClient
+    .from('ranking_items')
+    .select('*')
+    .eq('session_id', currentSession.id)
+    .order('sort_order', { ascending: true });
+
+  if (error) {
+    handleQueryError(error);
+    return;
+  }
+  rankingItems = data || [];
+}
+
+function renderRankingItemList() {
+  const listEl = document.getElementById('rankingitem-list');
+  listEl.innerHTML = '';
+  rankingItems.forEach((item) => {
+    const chip = document.createElement('div');
+    chip.className = 'category-chip';
+    const synopsisHtml = item.synopsis
+      ? ` <span class="muted">— ${escapeHtml(item.synopsis)}</span>`
+      : '';
+    chip.innerHTML = `<span>${escapeHtml(item.label)}${synopsisHtml}</span><button data-id="${item.id}">&times;</button>`;
+    chip.querySelector('button').addEventListener('click', () => removeRankingItem(item.id));
+    listEl.appendChild(chip);
+  });
+}
+
+async function addRankingItemFromInputs() {
+  const headlineInput = document.getElementById('new-rankingitem-headline-input');
+  const synopsisInput = document.getElementById('new-rankingitem-synopsis-input');
+  const errorEl = document.getElementById('rankingitem-error');
+  const headline = headlineInput.value.trim();
+  const synopsis = synopsisInput.value.trim();
+
+  if (!headline) return;
+
+  // max(sort_order)+1 rather than rankingItems.length — a prior removal
+  // can leave the array shorter than the highest sort_order already in
+  // use, and reusing .length would collide with a surviving item's value.
+  const nextSortOrder = rankingItems.reduce((max, item) => Math.max(max, item.sort_order), -1) + 1;
+
+  const { data, error } = await supabaseClient
+    .from('ranking_items')
+    .insert({
+      session_id: currentSession.id,
+      label: headline,
+      synopsis: synopsis || null,
+      sort_order: nextSortOrder
+    })
+    .select()
+    .single();
+
+  if (error) {
+    errorEl.textContent = error.message;
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  errorEl.classList.add('hidden');
+  rankingItems.push(data);
+  headlineInput.value = '';
+  synopsisInput.value = '';
+  renderRankingItemList();
+  updateModeBadge();
+}
+
+document.getElementById('add-rankingitem-btn').addEventListener('click', addRankingItemFromInputs);
+document.getElementById('new-rankingitem-headline-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    addRankingItemFromInputs();
+  }
+});
+document.getElementById('new-rankingitem-synopsis-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    addRankingItemFromInputs();
+  }
+});
+
+async function removeRankingItem(itemId) {
+  const { error } = await supabaseClient
+    .from('ranking_items')
+    .delete()
+    .eq('id', itemId);
+
+  if (error) {
+    handleQueryError(error);
+    return;
+  }
+
+  rankingItems = rankingItems.filter(item => item.id !== itemId);
+  renderRankingItemList();
+  updateModeBadge();
+}
+
+async function loadRankingTeamsAndSubmissions() {
+  const { data: teams, error: teamsError } = await supabaseClient
+    .from('ranking_teams')
+    .select('*')
+    .eq('session_id', currentSession.id);
+
+  if (teamsError) {
+    handleQueryError(teamsError);
+    return;
+  }
+  rankingTeams = teams || [];
+
+  const { data: submissions, error: subsError } = await supabaseClient
+    .from('ranking_submissions')
+    .select('*')
+    .eq('session_id', currentSession.id);
+
+  if (subsError) {
+    handleQueryError(subsError);
+    return;
+  }
+  rankingSubmissions = submissions || [];
+}
+
+function renderRunningOrderActivity() {
+  const summaryEl = document.getElementById('runningorder-activity-summary');
+  if (rankingTeams.length === 0) {
+    summaryEl.textContent = 'No teams yet';
+    return;
+  }
+  const submittedTeamIds = new Set(rankingSubmissions.map(s => s.team_id));
+  const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+  const activeCount = rankingTeams.filter(t =>
+    !submittedTeamIds.has(t.id) && new Date(t.last_activity_at).getTime() > fiveMinAgo
+  ).length;
+  summaryEl.textContent = `${activeCount} active · ${submittedTeamIds.size} submitted · ${rankingTeams.length} total seen`;
+}
+
+// Post-reveal only — pre-reveal, the room's projected display shows
+// nothing about team progress at all, and these controls are what drive
+// what the display broadcasts, so there's nothing useful to show yet.
+function renderRunningOrderViewControls() {
+  const controlsEl = document.getElementById('runningorder-view-controls');
+  controlsEl.classList.toggle('hidden', !resultsRevealed);
+  if (!resultsRevealed) return;
+
+  const selectEl = document.getElementById('runningorder-team-select');
+  const submittedTeamIds = new Set(rankingSubmissions.map(s => s.team_id));
+  const submittedTeams = rankingTeams.filter(t => submittedTeamIds.has(t.id));
+
+  selectEl.innerHTML = '<option value="">Select a team…</option>';
+  for (const team of submittedTeams) {
+    const opt = document.createElement('option');
+    opt.value = team.id;
+    opt.textContent = team.team_name;
+    selectEl.appendChild(opt);
+  }
+  selectEl.value = (rankingViewMode === 'team' && activeRankingTeamId) ? activeRankingTeamId : '';
+
+  document.getElementById('runningorder-aggregate-btn').classList.toggle('active', rankingViewMode === 'aggregate');
+}
+
+document.getElementById('runningorder-team-select').addEventListener('change', async (e) => {
+  const teamId = e.target.value;
+  if (!teamId) return;
+
+  const previousTeamId = activeRankingTeamId;
+  const previousMode = rankingViewMode;
+  activeRankingTeamId = teamId;
+  rankingViewMode = 'team';
+
+  const { error } = await supabaseClient
+    .from('sessions')
+    .update({ active_ranking_team_id: teamId, ranking_view_mode: 'team' })
+    .eq('id', currentSession.id);
+
+  if (error) {
+    activeRankingTeamId = previousTeamId;
+    rankingViewMode = previousMode;
+    renderRunningOrderViewControls();
+    handleQueryError(error);
+    return;
+  }
+
+  currentSession.active_ranking_team_id = teamId;
+  currentSession.ranking_view_mode = 'team';
+  renderRunningOrderViewControls();
+});
+
+document.getElementById('runningorder-aggregate-btn').addEventListener('click', async () => {
+  const previousMode = rankingViewMode;
+  rankingViewMode = 'aggregate';
+
+  const { error } = await supabaseClient
+    .from('sessions')
+    .update({ ranking_view_mode: 'aggregate' })
+    .eq('id', currentSession.id);
+
+  if (error) {
+    rankingViewMode = previousMode;
+    renderRunningOrderViewControls();
+    handleQueryError(error);
+    return;
+  }
+
+  currentSession.ranking_view_mode = 'aggregate';
+  renderRunningOrderViewControls();
+});
+
+function setupRunningOrderSubscription() {
+  teardownRunningOrderSubscription();
+
+  const channel = supabaseClient
+    .channel(`running_order_${currentSession.id}`)
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'ranking_teams',
+      filter: `session_id=eq.${currentSession.id}`
+    }, async () => {
+      await loadRankingTeamsAndSubmissions();
+      renderRunningOrderActivity();
+      renderRunningOrderViewControls();
+    })
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'ranking_teams',
+      filter: `session_id=eq.${currentSession.id}`
+    }, async () => {
+      await loadRankingTeamsAndSubmissions();
+      renderRunningOrderActivity();
+      renderRunningOrderViewControls();
+    })
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'ranking_submissions',
+      filter: `session_id=eq.${currentSession.id}`
+    }, async () => {
+      await loadRankingTeamsAndSubmissions();
+      renderRunningOrderActivity();
+      renderRunningOrderViewControls();
+    })
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'ranking_submissions',
+      filter: `session_id=eq.${currentSession.id}`
+    }, async () => {
+      await loadRankingTeamsAndSubmissions();
+      renderRunningOrderActivity();
+      renderRunningOrderViewControls();
+    })
+    .subscribe((status) => {
+      // See setupFeedSubscription: ignore callbacks from a channel that's
+      // no longer the active one (removeChannel fires CLOSED on teardown).
+      if (runningOrderChannel !== channel) return;
+      const banner = document.getElementById('connection-banner');
+      if (status === 'SUBSCRIBED') {
+        banner.classList.add('hidden');
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        banner.classList.remove('hidden');
+        scheduleRunningOrderReconnect();
+      }
+    });
+
+  runningOrderChannel = channel;
+}
+
+function scheduleRunningOrderReconnect() {
+  if (runningOrderReconnectTimer) return;
+  runningOrderReconnectTimer = setTimeout(() => {
+    runningOrderReconnectTimer = null;
+    if (currentSession && currentSession.running_order_enabled && !screens.sessionView.classList.contains('hidden')) {
+      setupRunningOrderSubscription();
+    }
+  }, 3000);
+}
+
+function teardownRunningOrderSubscription() {
+  if (runningOrderChannel) {
+    supabaseClient.removeChannel(runningOrderChannel);
+    runningOrderChannel = null;
+  }
+  if (runningOrderReconnectTimer) {
+    clearTimeout(runningOrderReconnectTimer);
+    runningOrderReconnectTimer = null;
+  }
+}
 
 // ---------------- Reset session responses ----------------
 // Clears collected data only — never touches session_code, categories,
@@ -3056,6 +3443,40 @@ async function resetSessionResponses() {
     return;
   }
 
+  // Deleting ranking_teams cascades to ranking_moves/ranking_submissions
+  // (both FK on delete cascade), but each gets its own explicit, checked
+  // delete here anyway, same as every table above — ranking_items is kept,
+  // same as every other session type keeps its configuration.
+  const { error: rtError } = await supabaseClient
+    .from('ranking_teams')
+    .delete()
+    .eq('session_id', currentSession.id);
+
+  if (rtError) {
+    showError('Could not reset responses: ' + rtError.message);
+    return;
+  }
+
+  const { error: rmError } = await supabaseClient
+    .from('ranking_moves')
+    .delete()
+    .eq('session_id', currentSession.id);
+
+  if (rmError) {
+    showError('Could not reset responses: ' + rmError.message);
+    return;
+  }
+
+  const { error: rsError } = await supabaseClient
+    .from('ranking_submissions')
+    .delete()
+    .eq('session_id', currentSession.id);
+
+  if (rsError) {
+    showError('Could not reset responses: ' + rsError.message);
+    return;
+  }
+
   const updatePayload = { results_revealed: false };
   if (currentSession.guided_categories) {
     updatePayload.active_category_id = null;
@@ -3068,6 +3489,10 @@ async function resetSessionResponses() {
     updatePayload.media_transport_position_ms = null;
     updatePayload.media_transport_issued_at = null;
     updatePayload.media_transport_seq = 0;
+  }
+  if (currentSession.running_order_enabled) {
+    updatePayload.active_ranking_team_id = null;
+    updatePayload.ranking_view_mode = null;
   }
 
   const { error: sessError } = await supabaseClient
@@ -3092,6 +3517,10 @@ async function resetSessionResponses() {
     currentSession.media_transport_position_ms = null;
     currentSession.media_transport_issued_at = null;
     currentSession.media_transport_seq = 0;
+  }
+  if (currentSession.running_order_enabled) {
+    currentSession.active_ranking_team_id = null;
+    currentSession.ranking_view_mode = null;
   }
 
   // Re-run the same load path used to enter the session in the first
@@ -3424,7 +3853,7 @@ document.addEventListener('keydown', (e) => {
   const tag = document.activeElement && document.activeElement.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA') return;
   if (!currentSession || screens.sessionView.classList.contains('hidden')) return;
-  const isPlainTextSession = !currentSession.quick_tap_enabled && !currentSession.guided_categories && !currentSession.text_markup_enabled && !currentSession.media_vote_enabled;
+  const isPlainTextSession = !currentSession.quick_tap_enabled && !currentSession.guided_categories && !currentSession.text_markup_enabled && !currentSession.media_vote_enabled && !currentSession.running_order_enabled;
   if (!isPlainTextSession) return;
   e.preventDefault();
   toggleFeedViewMode();
@@ -3937,6 +4366,10 @@ document.addEventListener('keydown', (e) => {
   if (tag === 'INPUT' || tag === 'TEXTAREA') return;
   if (screens.sessionView.classList.contains('hidden')) return;
   e.preventDefault();
+  // No team/aggregate view-cycling shortcut yet — explicit early return
+  // rather than falling through to cycleChartType(), which has no
+  // quick_tap_options to cycle for this session type.
+  if (currentSession && currentSession.running_order_enabled) return;
   if (currentSession && currentSession.text_markup_enabled && !currentSession.quick_tap_enabled) {
     cycleTextMarkupChartType();
   } else {

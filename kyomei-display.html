@@ -502,6 +502,46 @@
     padding: 4vw;
   }
   .video-test-close-btn { position: absolute; top: 24px; right: 24px; }
+
+  /* ---- Running Order display ---- */
+  .runningorder-display-view { display: flex; flex-direction: column; gap: 14px; max-height: 70vh; overflow-y: auto; width: 100%; }
+  .runningorder-display-panels { display: flex; flex-wrap: wrap; gap: 24px; width: 100%; }
+  .runningorder-display-panel { flex: 1 1 420px; min-width: 0; }
+  .runningorder-display-panel-label {
+    font-size: clamp(1rem, 1.5vw, 1.3rem);
+    font-weight: 700;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .runningorder-display-row {
+    display: flex;
+    align-items: baseline;
+    gap: 20px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 16px 22px;
+    text-align: left;
+    margin-bottom: 14px;
+  }
+  .runningorder-display-count {
+    font-size: clamp(1.6rem, 2.8vw, 2.4rem);
+    font-weight: 800;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  .runningorder-display-label {
+    font-size: clamp(1.2rem, 1.8vw, 1.7rem);
+    color: var(--text);
+  }
+  .runningorder-display-synopsis {
+    font-size: clamp(0.9rem, 1.2vw, 1.1rem);
+    color: var(--muted);
+    margin-top: 4px;
+  }
+  /* Pairwise reversal count of 2+ is the display-layer's "genuine
+     oscillation" cue the schema comment calls for — bold, not a filter. */
+  .runningorder-display-row.runningorder-emphasis .runningorder-display-count { color: var(--danger); }
 </style>
 </head>
 <body>
@@ -620,6 +660,30 @@
   </div>
 </div>
 
+<div id="runningorder-display-screen" class="screen hidden">
+  <div class="quicktap-session-name" id="runningorder-display-session-name"></div>
+  <div id="runningorder-display-waiting-status" class="hidden-status-lg hidden">Collecting responses…</div>
+  <div id="runningorder-display-team-view" class="runningorder-display-view hidden">
+    <div id="runningorder-display-team-list"></div>
+  </div>
+  <div id="runningorder-display-aggregate-view" class="runningorder-display-view hidden">
+    <div class="runningorder-display-panel">
+      <div class="runningorder-display-panel-label">Average final position</div>
+      <div id="runningorder-display-avgposition-list"></div>
+    </div>
+    <div class="runningorder-display-panels">
+      <div class="runningorder-display-panel">
+        <div class="runningorder-display-panel-label">Moves per item</div>
+        <div id="runningorder-display-movecounts-list"></div>
+      </div>
+      <div class="runningorder-display-panel">
+        <div class="runningorder-display-panel-label">Pairwise reversals</div>
+        <div id="runningorder-display-reversals-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 // ======================================================================
 // CONFIG — fill in before deploying. anon/public key only — NEVER the
@@ -653,7 +717,7 @@ function escapeHtml(str) {
 }
 
 function showScreen(id) {
-  ['loading-screen', 'invalid-session-screen', 'idle-screen', 'feed-screen', 'quicktap-display-screen', 'textmarkup-display-screen', 'mediavote-display-screen'].forEach(s => {
+  ['loading-screen', 'invalid-session-screen', 'idle-screen', 'feed-screen', 'quicktap-display-screen', 'textmarkup-display-screen', 'mediavote-display-screen', 'runningorder-display-screen'].forEach(s => {
     document.getElementById(s).classList.toggle('hidden', s !== id);
   });
 }
@@ -719,7 +783,10 @@ function hideJoinInfoOverlay() {
 
 // ---------------- Bootstrap ----------------
 let currentSession = null;
-let displayMode = null; // 'plain' | 'guided' | 'quicktap' | 'textmarkup'
+let displayMode = null; // 'plain' | 'guided' | 'quicktap' | 'textmarkup' | 'runningorder'
+let runningOrderItems = [];
+let rankingViewMode = null;
+let activeRankingTeamId = null;
 
 async function init() {
   const params = new URLSearchParams(window.location.search);
@@ -743,7 +810,10 @@ async function init() {
 
   currentSession = session;
 
-  if (session.quick_tap_enabled) {
+  if (session.running_order_enabled) {
+    displayMode = 'runningorder';
+    await initRunningOrderDisplay(session);
+  } else if (session.quick_tap_enabled) {
     displayMode = 'quicktap';
     await initQuickTapDisplay(session);
   } else if (session.text_markup_enabled) {
@@ -2681,6 +2751,182 @@ document.getElementById('video-test-close-btn').addEventListener('click', () => 
   document.getElementById('video-test-overlay').classList.add('hidden');
 });
 
+// ---------------- Running Order display ----------------
+// No dedicated realtime channel here — once results_revealed is true, the
+// RPCs enforce a hard stop on further moves/submissions (see
+// record_ranking_move/submit_ranking_order), so there is nothing left to
+// change post-reveal except the tutor's ranking_view_mode/
+// active_ranking_team_id picks, which the shared sessions subscription
+// below already watches.
+async function initRunningOrderDisplay(session) {
+  const { data: items, error } = await supabaseClient
+    .from('ranking_items')
+    .select('*')
+    .eq('session_id', session.id)
+    .order('sort_order', { ascending: true });
+
+  if (error) {
+    showScreen('invalid-session-screen');
+    return;
+  }
+  runningOrderItems = items || [];
+  resultsRevealed = !!session.results_revealed;
+  rankingViewMode = session.ranking_view_mode || null;
+  activeRankingTeamId = session.active_ranking_team_id || null;
+
+  document.getElementById('runningorder-display-session-name').textContent = session.name;
+
+  showScreen('runningorder-display-screen');
+  await renderRunningOrderDisplayState();
+
+  setupSessionsSubscription();
+}
+
+async function renderRunningOrderDisplayState() {
+  const waitingEl = document.getElementById('runningorder-display-waiting-status');
+  const teamViewEl = document.getElementById('runningorder-display-team-view');
+  const aggregateViewEl = document.getElementById('runningorder-display-aggregate-view');
+
+  if (!resultsRevealed) {
+    waitingEl.classList.remove('hidden');
+    teamViewEl.classList.add('hidden');
+    aggregateViewEl.classList.add('hidden');
+    return;
+  }
+
+  waitingEl.classList.add('hidden');
+
+  if (rankingViewMode === 'team' && activeRankingTeamId) {
+    teamViewEl.classList.remove('hidden');
+    aggregateViewEl.classList.add('hidden');
+    await renderRunningOrderTeamView();
+  } else if (rankingViewMode === 'aggregate') {
+    teamViewEl.classList.add('hidden');
+    aggregateViewEl.classList.remove('hidden');
+    await renderRunningOrderAggregateView();
+  } else {
+    // Revealed, but the tutor hasn't picked a team/aggregate view yet.
+    teamViewEl.classList.add('hidden');
+    aggregateViewEl.classList.add('hidden');
+  }
+}
+
+async function renderRunningOrderTeamView() {
+  const listEl = document.getElementById('runningorder-display-team-list');
+  listEl.innerHTML = '';
+
+  const { data: submission, error } = await supabaseClient
+    .from('ranking_submissions')
+    .select('final_order')
+    .eq('team_id', activeRankingTeamId)
+    .maybeSingle();
+
+  if (error || !submission) return;
+
+  (submission.final_order || []).forEach((itemId, idx) => {
+    const item = runningOrderItems.find(i => i.id === itemId);
+    if (!item) return;
+    const row = document.createElement('div');
+    row.className = 'runningorder-display-row';
+    const synopsisHtml = item.synopsis
+      ? `<div class="runningorder-display-synopsis">${escapeHtml(item.synopsis)}</div>`
+      : '';
+    row.innerHTML = `
+      <div class="runningorder-display-count">${idx + 1}</div>
+      <div><div class="runningorder-display-label">${escapeHtml(item.label)}</div>${synopsisHtml}</div>
+    `;
+    listEl.appendChild(row);
+  });
+}
+
+async function renderRunningOrderAggregateView() {
+  const { data: submissions } = await supabaseClient
+    .from('ranking_submissions')
+    .select('final_order')
+    .eq('session_id', currentSession.id);
+
+  const { data: moveCounts } = await supabaseClient.rpc('get_ranking_item_move_counts', {
+    p_session_id: currentSession.id
+  });
+  const { data: reversals } = await supabaseClient.rpc('get_ranking_pair_reversals', {
+    p_session_id: currentSession.id
+  });
+
+  renderRunningOrderAveragePosition(submissions || []);
+  renderRunningOrderMoveCounts(moveCounts || []);
+  renderRunningOrderReversals(reversals || []);
+}
+
+function renderRunningOrderAveragePosition(submissions) {
+  const positionSums = {};
+  const positionCounts = {};
+  submissions.forEach(sub => {
+    (sub.final_order || []).forEach((itemId, idx) => {
+      positionSums[itemId] = (positionSums[itemId] || 0) + (idx + 1);
+      positionCounts[itemId] = (positionCounts[itemId] || 0) + 1;
+    });
+  });
+
+  const rows = runningOrderItems
+    .map(item => ({
+      item,
+      avg: positionCounts[item.id] ? positionSums[item.id] / positionCounts[item.id] : null
+    }))
+    .sort((a, b) => (a.avg ?? Infinity) - (b.avg ?? Infinity));
+
+  const listEl = document.getElementById('runningorder-display-avgposition-list');
+  listEl.innerHTML = '';
+  rows.forEach(({ item, avg }) => {
+    const row = document.createElement('div');
+    row.className = 'runningorder-display-row';
+    row.innerHTML = `
+      <div class="runningorder-display-count">${avg !== null ? avg.toFixed(1) : '—'}</div>
+      <div class="runningorder-display-label">${escapeHtml(item.label)}</div>
+    `;
+    listEl.appendChild(row);
+  });
+}
+
+function renderRunningOrderMoveCounts(moveCounts) {
+  const countMap = {};
+  moveCounts.forEach(row => { countMap[row.item_id] = row.move_count; });
+
+  const rows = runningOrderItems
+    .map(item => ({ item, count: countMap[item.id] || 0 }))
+    .sort((a, b) => b.count - a.count);
+
+  const listEl = document.getElementById('runningorder-display-movecounts-list');
+  listEl.innerHTML = '';
+  rows.forEach(({ item, count }) => {
+    const row = document.createElement('div');
+    row.className = 'runningorder-display-row';
+    row.innerHTML = `
+      <div class="runningorder-display-count">${count}</div>
+      <div class="runningorder-display-label">${escapeHtml(item.label)}</div>
+    `;
+    listEl.appendChild(row);
+  });
+}
+
+function renderRunningOrderReversals(reversals) {
+  const listEl = document.getElementById('runningorder-display-reversals-list');
+  listEl.innerHTML = '';
+  reversals.forEach(row => {
+    const itemA = runningOrderItems.find(i => i.id === row.item_a_id);
+    const itemB = runningOrderItems.find(i => i.id === row.item_b_id);
+    if (!itemA || !itemB) return;
+    const rowEl = document.createElement('div');
+    // A count of 2+ is the "genuine oscillation" cue — bold via CSS, not a
+    // filter (see the RPC's comment: the full distribution is the point).
+    rowEl.className = 'runningorder-display-row' + (row.reversal_count >= 2 ? ' runningorder-emphasis' : '');
+    rowEl.innerHTML = `
+      <div class="runningorder-display-count">${row.reversal_count}</div>
+      <div class="runningorder-display-label">${escapeHtml(itemA.label)} &harr; ${escapeHtml(itemB.label)}</div>
+    `;
+    listEl.appendChild(rowEl);
+  });
+}
+
 // ---------------- Sessions subscription (guided category switches + reveal flips) ----------------
 let sessionsChannel = null;
 let sessionsReconnectTimer = null;
@@ -2814,6 +3060,26 @@ function setupSessionsSubscription() {
           // Cheap re-bucket of already-fetched data — no refetch needed
           // just because the slider moved.
           renderMediaVoteDisplayTimeline();
+        }
+      } else if (displayMode === 'runningorder') {
+        const newRevealed = !!payload.new.results_revealed;
+        const newViewMode = payload.new.ranking_view_mode || null;
+        const newActiveTeamId = payload.new.active_ranking_team_id || null;
+        const revealChanged = newRevealed !== resultsRevealed;
+        const viewChanged = newViewMode !== rankingViewMode || newActiveTeamId !== activeRankingTeamId;
+
+        if (revealChanged) {
+          resultsRevealed = newRevealed;
+          currentSession.results_revealed = newRevealed;
+        }
+        if (viewChanged) {
+          rankingViewMode = newViewMode;
+          activeRankingTeamId = newActiveTeamId;
+          currentSession.ranking_view_mode = newViewMode;
+          currentSession.active_ranking_team_id = newActiveTeamId;
+        }
+        if (revealChanged || viewChanged) {
+          await renderRunningOrderDisplayState();
         }
       }
     })

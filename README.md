@@ -33,6 +33,12 @@ Every session is exactly one of these, set at creation:
   controls in admin; students vote on a fixed button set as it plays,
   retapping freely. A reveal-gated timeline reconstructs how the room's
   vote evolved across the clip, bucketed at a tutor-adjustable interval.
+- **Running Order** — a tutor authors story headlines; physical groups each
+  claim a team name on one device and reorder the stories via up/down
+  buttons. The tutor reveals one team's final order, or a room-wide
+  aggregate — average final position, plus two oscillation views (move
+  count and pairwise reversals) showing which stories caused the most
+  back-and-forth.
 
 ## JS libraries
 
