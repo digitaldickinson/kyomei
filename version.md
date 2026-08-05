@@ -8,11 +8,23 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. `friction_pool_schema.sql` is not tracked in git, so any entry that changed the schema is flagged (**schema**) as a reminder to re-run it against Supabase.
 
-**Current version: 2.0.2**
+**Current version: 2.1.0**
 
 ---
 
 ## Log
+
+### 2.1.0 — 2026-08-05 — **schema**
+Text Markup — two new tutor-controlled heatmap toggles, broadcast to the display screen the same
+way chart-type cycling and the compare picker already are. (1) A "Solo selections" divergence mode
+that highlights words picked by only 1-2 respondents instead of consensus hotspots, for discussing
+what one student noticed that the room missed. (2) A colorblind-friendly Viridis-style palette
+(dark purple → teal → yellow) alongside the existing blue-to-red ramp, with per-word text-color
+contrast handling since that ramp swings from very dark to very bright — the classic palette's
+fixed dark text is untouched. Both toggles live in kyomei-admin.html next to the heatmap view and
+sync to kyomei-display.html via two new `sessions` columns (`text_markup_heatmap_mode`,
+`text_markup_palette`); both reset to their defaults whenever results are freshly revealed, same as
+chart-type. Schema change, needs manual re-run against Supabase.
 
 ### 2.0.2 — 2026-08-05 — **schema**
 Running Order bug fixes found during an evaluation pass, not a new build prompt. (1) A device whose

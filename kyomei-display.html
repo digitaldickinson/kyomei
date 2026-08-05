@@ -1666,6 +1666,8 @@ let textMarkupLocale = 'en';
 let textMarkupComparePromptId = null; // non-null: show this prompt's heatmap alongside the active one
 let textMarkupChartType = 'heatmap';
 const TEXTMARKUP_CHART_TYPES = ['heatmap', 'community'];
+let textMarkupHeatmapMode = 'consensus'; // 'consensus' | 'divergence' — tutor-controlled, mirrors sessions.text_markup_heatmap_mode
+let textMarkupPalette = 'classic'; // 'classic' | 'colorblind' — mirrors sessions.text_markup_palette
 
 // ---------------------------------------------------------------------
 // Shared passage tokenizer — copy-pasted identically into kyomei.html,
@@ -1786,25 +1788,50 @@ function computeTextMarkupCommunityRuns(counts) {
 // Zero-count words never reach this function (renderTextMarkupHeatmap
 // gates on ratio > 0), so the ratio:0 stop is really "lowest non-zero
 // count" — blue, the cold end of a cold-to-hot ramp through to red.
-const HEATMAP_STOPS = [
-  { ratio: 0,    color: [64, 145, 255] },  // blue — cold, lightly highlighted
-  { ratio: 0.33, color: [255, 231, 145] }, // pale yellow
-  { ratio: 0.66, color: [255, 149, 62] },  // orange
-  { ratio: 1,    color: [214, 40, 40] }    // red — hot, peak intensity
-];
+// 'colorblind' is a Viridis-style purple-to-yellow ramp — perceptually
+// uniform and distinguishable under red-green color blindness, for
+// low-contrast classroom projectors.
+const HEATMAP_PALETTES = {
+  classic: [
+    { ratio: 0,    color: [64, 145, 255] },  // blue — cold, lightly highlighted
+    { ratio: 0.33, color: [255, 231, 145] }, // pale yellow
+    { ratio: 0.66, color: [255, 149, 62] },  // orange
+    { ratio: 1,    color: [214, 40, 40] }    // red — hot, peak intensity
+  ],
+  colorblind: [
+    { ratio: 0,    color: [68, 1, 84] },     // dark purple
+    { ratio: 0.33, color: [33, 145, 140] },  // teal
+    { ratio: 0.66, color: [94, 201, 98] },   // green
+    { ratio: 1,    color: [253, 231, 37] }   // yellow
+  ]
+};
 
-function heatmapColorForRatio(ratio) {
-  for (let i = 0; i < HEATMAP_STOPS.length - 1; i++) {
-    const a = HEATMAP_STOPS[i];
-    const b = HEATMAP_STOPS[i + 1];
+function heatmapRgbForRatio(ratio, stops) {
+  for (let i = 0; i < stops.length - 1; i++) {
+    const a = stops[i];
+    const b = stops[i + 1];
     if (ratio >= a.ratio && ratio <= b.ratio) {
       const t = (ratio - a.ratio) / (b.ratio - a.ratio);
-      const rgb = a.color.map((c, idx) => Math.round(c + (b.color[idx] - c) * t));
-      return `rgb(${rgb.join(',')})`;
+      return a.color.map((c, idx) => Math.round(c + (b.color[idx] - c) * t));
     }
   }
-  return `rgb(${HEATMAP_STOPS[HEATMAP_STOPS.length - 1].color.join(',')})`;
+  return stops[stops.length - 1].color;
 }
+
+// The classic palette's dark text (#1a1a1a) was tuned against its own
+// narrow ramp and stays fixed — untouched here. Colorblind's ramp swings
+// from very dark (purple) to very bright (yellow), so its text color is
+// picked per-word from the interpolated background's luminance instead.
+function heatmapTextColor(rgb) {
+  const [r, g, b] = rgb;
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.5 ? '#1a1a1a' : '#f5f5f5';
+}
+
+// A word counts as a "solo selection" in divergence mode if 1-2
+// respondents picked it — matching a small discussion-worthy handful,
+// not a percentage-based threshold (that's a separate, unbuilt idea).
+const DIVERGENCE_MAX_COUNT = 2;
 
 // containerId defaults to the normal single-view container so every
 // existing call site is unaffected — comparison mode passes the two
@@ -1812,22 +1839,35 @@ function heatmapColorForRatio(ratio) {
 // function twice rather than duplicating a second implementation.
 function renderTextMarkupHeatmap(counts, containerId = 'textmarkup-display-heatmap-view') {
   const container = document.getElementById(containerId);
+  const stops = HEATMAP_PALETTES[textMarkupPalette] || HEATMAP_PALETTES.classic;
   const peak = counts.length ? Math.max(0, ...counts) : 0;
   container.innerHTML = textMarkupRenderedParagraphs.map(para => {
     if (para.blank) return `<p>&nbsp;</p>`;
     const inner = para.segments.map(seg => {
       if (seg.type !== 'word') return escapeHtml(seg.text);
       const c = counts[seg.index] || 0;
-      const ratio = peak > 0 ? c / peak : 0;
-      // Square-root, not linear — see admin's identical comment: a single
-      // runaway-popular phrase would otherwise flatten genuinely
-      // different levels of moderate agreement elsewhere into equal
-      // faintness against the one outlier peak.
-      const scaledRatio = Math.sqrt(ratio);
-      const style = ratio > 0
-        ? ` style="background:${heatmapColorForRatio(scaledRatio)};color:#1a1a1a;border-radius:3px;"`
-        : '';
-      return `<span${style}>${escapeHtml(seg.text)}</span>`;
+
+      let scaledRatio;
+      if (textMarkupHeatmapMode === 'divergence') {
+        // Minority view: only words picked by a small handful of
+        // respondents light up, so they aren't drowned out by the room's
+        // consensus hotspots — fewer picks renders hotter.
+        scaledRatio = (c > 0 && c <= DIVERGENCE_MAX_COUNT)
+          ? (DIVERGENCE_MAX_COUNT - c + 1) / DIVERGENCE_MAX_COUNT
+          : 0;
+      } else {
+        const ratio = peak > 0 ? c / peak : 0;
+        // Square-root, not linear — see admin's identical comment: a single
+        // runaway-popular phrase would otherwise flatten genuinely
+        // different levels of moderate agreement elsewhere into equal
+        // faintness against the one outlier peak.
+        scaledRatio = Math.sqrt(ratio);
+      }
+
+      if (scaledRatio <= 0) return `<span>${escapeHtml(seg.text)}</span>`;
+      const rgb = heatmapRgbForRatio(scaledRatio, stops);
+      const textColor = textMarkupPalette === 'colorblind' ? heatmapTextColor(rgb) : '#1a1a1a';
+      return `<span style="background:rgb(${rgb.join(',')});color:${textColor};border-radius:3px;">${escapeHtml(seg.text)}</span>`;
     }).join('');
     return `<p>${inner}</p>`;
   }).join('');
@@ -1901,6 +1941,8 @@ async function initTextMarkupDisplay(session) {
   textMarkupChartType = TEXTMARKUP_CHART_TYPES.includes(session.text_markup_chart_type)
     ? session.text_markup_chart_type
     : 'heatmap';
+  textMarkupHeatmapMode = session.text_markup_heatmap_mode === 'divergence' ? 'divergence' : 'consensus';
+  textMarkupPalette = session.text_markup_palette === 'colorblind' ? 'colorblind' : 'classic';
   applyTextMarkupChartTypeVisibility();
 
   document.getElementById('textmarkup-display-session-name').textContent = session.name;
@@ -3005,6 +3047,11 @@ function setupSessionsSubscription() {
         const newComparePromptId = payload.new.text_markup_compare_prompt_id || null;
         const compareChanged = newComparePromptId !== textMarkupComparePromptId;
 
+        const newHeatmapMode = payload.new.text_markup_heatmap_mode === 'divergence' ? 'divergence' : 'consensus';
+        const newPalette = payload.new.text_markup_palette === 'colorblind' ? 'colorblind' : 'classic';
+        const heatmapModeChanged = newHeatmapMode !== textMarkupHeatmapMode;
+        const paletteChanged = newPalette !== textMarkupPalette;
+
         if (promptChanged) {
           textMarkupActivePromptId = newPromptId;
           currentSession.active_prompt_id = newPromptId;
@@ -3015,14 +3062,33 @@ function setupSessionsSubscription() {
           if (newRevealed) {
             // Always land on the fuller picture first when results are newly revealed.
             textMarkupChartType = 'heatmap';
+            textMarkupHeatmapMode = 'consensus';
+            textMarkupPalette = 'classic';
           }
         }
         if (compareChanged) {
           textMarkupComparePromptId = newComparePromptId;
           currentSession.text_markup_compare_prompt_id = newComparePromptId;
         }
+        // Skip re-applying these from the broadcast on the same event that
+        // just force-reset them above via revealChanged — same reasoning
+        // as the chart-type guard below.
+        if (!revealChanged && heatmapModeChanged) {
+          textMarkupHeatmapMode = newHeatmapMode;
+          currentSession.text_markup_heatmap_mode = payload.new.text_markup_heatmap_mode;
+        }
+        if (!revealChanged && paletteChanged) {
+          textMarkupPalette = newPalette;
+          currentSession.text_markup_palette = payload.new.text_markup_palette;
+        }
         if (promptChanged || revealChanged || compareChanged) {
           await renderTextMarkupDisplayState();
+        } else if (heatmapModeChanged || paletteChanged) {
+          // Mode/palette only change the heatmap's colors, not which data
+          // is shown — recompute from the DB rather than caching compare
+          // responses locally just for this, same "refetch is cheap at
+          // classroom scale" reasoning used elsewhere in this file.
+          if (resultsRevealed) await loadTextMarkupAggregate();
         }
 
         // Only apply a genuine cycle broadcast — not the same event's
