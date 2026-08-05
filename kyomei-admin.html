@@ -723,6 +723,7 @@
       <div id="runningorder-panel" class="hidden">
         <div class="panel">
           <label class="field-subheading">Story items</label>
+          <div id="rankingitem-active-teams-warning" class="field-error hidden">Teams have already joined — adding or removing items now means their submission will fail until they refresh.</div>
           <div class="category-list" id="rankingitem-list"></div>
           <div class="add-cat-row">
             <input id="new-rankingitem-headline-input" type="text" placeholder="Headline">
@@ -3116,8 +3117,16 @@ async function loadRankingItems() {
   rankingItems = data || [];
 }
 
+// Teams snapshot their item list on join, so editing items after teams
+// exist desyncs anyone already in progress — this just surfaces that risk
+// where the tutor is about to act, it doesn't block the edit.
+function updateRankingItemsTeamWarning() {
+  document.getElementById('rankingitem-active-teams-warning').classList.toggle('hidden', rankingTeams.length === 0);
+}
+
 function renderRankingItemList() {
   const listEl = document.getElementById('rankingitem-list');
+  updateRankingItemsTeamWarning();
   listEl.innerHTML = '';
   rankingItems.forEach((item) => {
     const chip = document.createElement('div');
@@ -3225,6 +3234,7 @@ async function loadRankingTeamsAndSubmissions() {
 }
 
 function renderRunningOrderActivity() {
+  updateRankingItemsTeamWarning();
   const summaryEl = document.getElementById('runningorder-activity-summary');
   if (rankingTeams.length === 0) {
     summaryEl.textContent = 'No teams yet';

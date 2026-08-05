@@ -1368,9 +1368,20 @@ async function initRunningOrder(session) {
 
   showScreen('runningorder-screen');
 
-  if (existingTeams && existingTeams.length > 0) {
-    rankingTeamId = existingTeams[0].id;
+  const existingTeam = existingTeams && existingTeams.length > 0 ? existingTeams[0] : null;
+
+  if (existingTeam && existingTeam.superseded) {
+    // Another device reclaimed this team name while this one was idle —
+    // don't reopen straight into "you can edit" only to have the first
+    // move/submit get silently rejected.
+    showRunningOrderSuperseded();
+  } else if (existingTeam) {
+    rankingTeamId = existingTeam.id;
     showRunningOrderRankingForm();
+  } else if (session.results_revealed) {
+    // No claim yet and results are already in — don't let someone spend
+    // time naming a team and reordering items just to hit a wall at submit.
+    showRunningOrderClosed();
   } else {
     document.getElementById('runningorder-join-form').classList.remove('hidden');
     document.getElementById('runningorder-ranking-form').classList.add('hidden');
@@ -1403,6 +1414,9 @@ document.getElementById('runningorder-claim-btn').addEventListener('click', asyn
   if (error) {
     if (error.message === 'TEAM_NAME_TAKEN') {
       errorBanner.textContent = "That name's already taken — try a different one.";
+    } else if (error.message === 'SESSION_REVEALED') {
+      showRunningOrderClosed();
+      return;
     } else {
       errorBanner.textContent = 'Could not join — check your connection and try again.';
     }
@@ -1437,8 +1451,8 @@ function renderRankingOrder() {
         ${synopsisHtml}
       </div>
       <div class="ranking-item-controls">
-        <button class="ranking-move-btn" type="button" data-dir="-1" ${idx === 0 ? 'disabled' : ''}>&uarr;</button>
-        <button class="ranking-move-btn" type="button" data-dir="1" ${idx === rankingOrder.length - 1 ? 'disabled' : ''}>&darr;</button>
+        <button class="ranking-move-btn" type="button" data-dir="-1" aria-label="Move ${escapeHtml(item.label)} up" ${idx === 0 ? 'disabled' : ''}>&uarr;</button>
+        <button class="ranking-move-btn" type="button" data-dir="1" aria-label="Move ${escapeHtml(item.label)} down" ${idx === rankingOrder.length - 1 ? 'disabled' : ''}>&darr;</button>
       </div>
     `;
     row.querySelectorAll('.ranking-move-btn').forEach(btn => {
@@ -1472,6 +1486,8 @@ function moveRankingItem(index, direction) {
   }).then(({ error }) => {
     if (error && error.message === 'TEAM_SUPERSEDED') {
       showRunningOrderSuperseded();
+    } else if (error && error.message === 'SESSION_REVEALED') {
+      showRunningOrderClosed();
     } else if (error) {
       console.error('record_ranking_move failed:', error.message);
     }
@@ -1484,6 +1500,34 @@ function showRunningOrderSuperseded() {
   document.getElementById('runningorder-submitted-status').classList.add('hidden');
   document.getElementById('runningorder-closed-status').classList.add('hidden');
   document.getElementById('runningorder-superseded-status').classList.remove('hidden');
+}
+
+function showRunningOrderClosed() {
+  document.getElementById('runningorder-join-form').classList.add('hidden');
+  document.getElementById('runningorder-ranking-form').classList.add('hidden');
+  document.getElementById('runningorder-submitted-status').classList.add('hidden');
+  document.getElementById('runningorder-superseded-status').classList.add('hidden');
+  document.getElementById('runningorder-closed-status').classList.remove('hidden');
+}
+
+// The tutor's item-editing controls stay live for the whole session (not
+// just before teams join), so a team's locally-held item list can go stale
+// mid-session. submit_ranking_order rejects that with INCOMPLETE_ORDER/
+// INVALID_ITEM_IN_ORDER — this pulls the current roster, keeps this team's
+// relative order for items that still exist, and appends anything new.
+async function refreshRankingItemsAfterDesync() {
+  const { data: items } = await supabaseClient
+    .from('ranking_items')
+    .select('*')
+    .eq('session_id', currentSession.id)
+    .order('sort_order', { ascending: true });
+  const freshItems = items || [];
+  const freshById = new Map(freshItems.map(i => [i.id, i]));
+  const kept = rankingOrder.filter(i => freshById.has(i.id));
+  const keptIds = new Set(kept.map(i => i.id));
+  const added = freshItems.filter(i => !keptIds.has(i.id));
+  rankingOrder = kept.concat(added);
+  renderRankingOrder();
 }
 
 document.getElementById('runningorder-submit-btn').addEventListener('click', async () => {
@@ -1511,8 +1555,13 @@ document.getElementById('runningorder-submit-btn').addEventListener('click', asy
       return;
     }
     if (error.message === 'SESSION_REVEALED') {
-      document.getElementById('runningorder-ranking-form').classList.add('hidden');
-      document.getElementById('runningorder-closed-status').classList.remove('hidden');
+      showRunningOrderClosed();
+      return;
+    }
+    if (error.message === 'INCOMPLETE_ORDER' || error.message === 'INVALID_ITEM_IN_ORDER') {
+      await refreshRankingItemsAfterDesync();
+      errorBanner.textContent = 'The list of items changed since you started — review your order below and submit again.';
+      errorBanner.classList.remove('hidden');
       return;
     }
     errorBanner.textContent = 'Could not submit — check your connection and try again.';

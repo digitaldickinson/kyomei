@@ -8,11 +8,31 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. `friction_pool_schema.sql` is not tracked in git, so any entry that changed the schema is flagged (**schema**) as a reminder to re-run it against Supabase.
 
-**Current version: 2.0.1**
+**Current version: 2.0.2**
 
 ---
 
 ## Log
+
+### 2.0.2 — 2026-08-05 — **schema**
+Running Order bug fixes found during an evaluation pass, not a new build prompt. (1) A device whose
+team claim had been superseded (another device reclaimed the name after 5 minutes idle) reopened
+straight into the ranking form on resume, only discovering the reclaim after its first move/submit
+silently failed — `get_own_ranking_team()`'s result is now checked client-side and routes straight
+to the "superseded" screen. (2) `claim_ranking_team()` had no `results_revealed` check, so a late
+joiner could name a team and fully reorder items after reveal, hitting a wall only at submit;
+added the same reveal check the other two RPCs already had, plus client-side handling so a
+post-reveal join attempt (or an in-progress team that gets revealed out from under it) shows the
+closed status immediately instead of after a wasted submit. (3) The tutor's item-editing controls
+stay live for the whole session, not just before teams join, so a team's client-held item snapshot
+can go stale mid-session; `submit_ranking_order`'s `INCOMPLETE_ORDER`/`INVALID_ITEM_IN_ORDER`
+rejection used to surface as a generic "check your connection" message — now it refetches the
+current item list, preserves the team's order for items that still exist, and shows an accurate
+message. Added a non-blocking admin-side warning near the item editor once teams exist, so this is
+less likely to happen in the first place. (4) `record_ranking_move` didn't reject a move where the
+moved and swapped-with item are the same id (schema change, needs manual re-run against Supabase).
+Also added `aria-label`s to the up/down reorder buttons (previously bare arrow glyphs with no
+accessible name).
 
 ### 2.0.1 — 2026-08-05 — **schema**
 Text Markup bug fixes found during an evaluation pass, not a new build prompt. (1) The
