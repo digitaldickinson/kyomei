@@ -1743,11 +1743,16 @@ function applyPassageDirection(el, locale) {
 function computeTextMarkupWordCounts(responses, totalWords) {
   const counts = new Array(totalWords).fill(0);
   for (const r of responses) {
+    // Dedup within a single response first — a participant can commit
+    // overlapping spans (e.g. two separate drags that share words), and
+    // each word should only count once per participant, not once per span.
+    const seen = new Set();
     for (const span of (r.spans || [])) {
       const start = Math.max(0, span.start);
       const end = Math.min(span.end, totalWords - 1);
-      for (let i = start; i <= end; i++) counts[i]++;
+      for (let i = start; i <= end; i++) seen.add(i);
     }
+    for (const i of seen) counts[i]++;
   }
   return counts;
 }

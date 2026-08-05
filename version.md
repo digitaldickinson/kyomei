@@ -8,11 +8,29 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. `friction_pool_schema.sql` is not tracked in git, so any entry that changed the schema is flagged (**schema**) as a reminder to re-run it against Supabase.
 
-**Current version: 2.0.0**
+**Current version: 2.0.1**
 
 ---
 
 ## Log
+
+### 2.0.1 — 2026-08-05 — **schema**
+Text Markup bug fixes found during an evaluation pass, not a new build prompt. (1) The
+delete-confirmation dialog's impact counts (`fetchDeleteImpactCounts()` in kyomei-admin.html) only
+ever branched on `quick_tap_enabled`; every other mode fell through to a `friction_pool`/
+`session_categories` count that's always zero for them, so deleting a Text Markup, Media Vote, or
+Running Order session showed "0 responses, 0 [items]" regardless of real data. Added proper
+branches for all four modes. (2) `text_markup_responses.spans` had no server-side shape validation
+— added a check constraint requiring a jsonb array of `{start, end}` objects with numeric,
+non-negative, ordered bounds (schema change, needs manual re-run against Supabase). (3) The
+heatmap/community aggregate (`computeTextMarkupWordCounts()`, duplicated in kyomei-admin.html and
+kyomei-display.html) summed +1 per span per response with no de-dup, so a participant submitting
+two overlapping highlight drags got double-counted for the overlapping words; now de-duped per
+response before counting. Also addressed as drive-by polish: larger tap-to-remove hit target on
+`.tm-word` (padding + compensating negative margin, no layout shift), `-webkit-touch-callout: none`
+on the passage to reduce iOS native-selection-menu interference, and baseline ARIA (`role="button"`/
+`aria-pressed` on word spans, `aria-live` on the textmarkup status banners) — not a substitute for
+real keyboard operability, which the passage still lacks.
 
 ### 2.0.0 — 2026-08-04 — **schema**
 Running Order — sixth session type. A tutor authors story headlines (with optional synopses);

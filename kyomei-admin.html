@@ -1937,11 +1937,16 @@ function applyPassageDirection(el, locale) {
 function computeTextMarkupWordCounts(responses, totalWords) {
   const counts = new Array(totalWords).fill(0);
   for (const r of responses) {
+    // Dedup within a single response first — a participant can commit
+    // overlapping spans (e.g. two separate drags that share words), and
+    // each word should only count once per participant, not once per span.
+    const seen = new Set();
     for (const span of (r.spans || [])) {
       const start = Math.max(0, span.start);
       const end = Math.min(span.end, totalWords - 1);
-      for (let i = start; i <= end; i++) counts[i]++;
+      for (let i = start; i <= end; i++) seen.add(i);
     }
+    for (const i of seen) counts[i]++;
   }
   return counts;
 }
@@ -3563,6 +3568,45 @@ async function fetchDeleteImpactCounts(session) {
       responseLabel: 'responses',
       itemCount: options.count || 0,
       itemLabel: 'options'
+    };
+  }
+
+  if (session.text_markup_enabled) {
+    const [responses, prompts] = await Promise.all([
+      supabaseClient.from('text_markup_responses').select('*', { count: 'exact', head: true }).eq('session_id', session.id),
+      supabaseClient.from('text_markup_prompts').select('*', { count: 'exact', head: true }).eq('session_id', session.id)
+    ]);
+    return {
+      responseCount: responses.count || 0,
+      responseLabel: 'responses',
+      itemCount: prompts.count || 0,
+      itemLabel: 'prompts'
+    };
+  }
+
+  if (session.media_vote_enabled) {
+    const [responses, options] = await Promise.all([
+      supabaseClient.from('media_vote_responses').select('*', { count: 'exact', head: true }).eq('session_id', session.id),
+      supabaseClient.from('quick_tap_options').select('*', { count: 'exact', head: true }).eq('session_id', session.id)
+    ]);
+    return {
+      responseCount: responses.count || 0,
+      responseLabel: 'votes',
+      itemCount: options.count || 0,
+      itemLabel: 'options'
+    };
+  }
+
+  if (session.running_order_enabled) {
+    const [submissions, items] = await Promise.all([
+      supabaseClient.from('ranking_submissions').select('*', { count: 'exact', head: true }).eq('session_id', session.id),
+      supabaseClient.from('ranking_items').select('*', { count: 'exact', head: true }).eq('session_id', session.id)
+    ]);
+    return {
+      responseCount: submissions.count || 0,
+      responseLabel: 'team submissions',
+      itemCount: items.count || 0,
+      itemLabel: 'items'
     };
   }
 

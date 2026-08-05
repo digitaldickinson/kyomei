@@ -220,11 +220,12 @@
     margin-bottom: 16px;
     -webkit-user-select: text;
     user-select: text;
+    -webkit-touch-callout: none;
     white-space: pre-wrap;
   }
   .tm-para { margin: 0 0 14px; }
   .tm-para:last-child { margin-bottom: 0; }
-  .tm-word { cursor: pointer; }
+  .tm-word { cursor: pointer; padding: 3px 2px; margin: -3px -2px; }
   .tm-word.tm-previewing { background: rgba(91,140,255,0.18); border-radius: 3px; }
   .tm-word.tm-highlighted { background: rgba(91,140,255,0.4); border-radius: 3px; }
 
@@ -363,13 +364,13 @@
     <div id="textmarkup-waiting-status" class="hidden-status hidden">Waiting for your tutor to start</div>
 
     <div id="textmarkup-active-form" class="hidden">
-      <div id="textmarkup-success-banner" class="status-banner ok hidden">Submitted! ✓</div>
-      <div id="textmarkup-error-banner" class="status-banner error hidden"></div>
-      <div id="textmarkup-warning-banner" class="status-banner warning hidden"></div>
+      <div id="textmarkup-success-banner" class="status-banner ok hidden" role="status" aria-live="polite">Submitted! ✓</div>
+      <div id="textmarkup-error-banner" class="status-banner error hidden" role="status" aria-live="polite"></div>
+      <div id="textmarkup-warning-banner" class="status-banner warning hidden" role="status" aria-live="polite"></div>
 
       <div class="quicktap-heading-display" id="textmarkup-prompt-label"></div>
 
-      <div id="textmarkup-passage" class="textmarkup-passage"></div>
+      <div id="textmarkup-passage" class="textmarkup-passage" role="group" aria-label="Passage — drag to highlight words in response to the prompt above"></div>
 
       <div class="textmarkup-actions">
         <button class="secondary-btn" type="button" id="textmarkup-clear-btn">Clear my highlights</button>
@@ -805,7 +806,7 @@ function buildPassageMarkup(renderedParagraphs) {
     if (para.blank) return `<p class="tm-para">&nbsp;</p>`;
     const inner = para.segments.map(seg => {
       if (seg.type === 'word') {
-        return `<span class="tm-word" data-word-index="${seg.index}">${escapeHtml(seg.text)}</span>`;
+        return `<span class="tm-word" data-word-index="${seg.index}" role="button" aria-pressed="false">${escapeHtml(seg.text)}</span>`;
       }
       return escapeHtml(seg.text);
     }).join('');
@@ -884,9 +885,11 @@ function renderHighlights() {
   wordEls.forEach(el => {
     el.classList.remove('tm-highlighted', 'tm-previewing');
     const idx = parseInt(el.dataset.wordIndex, 10);
-    if (currentRanges.some(r => idx >= r.start && idx <= r.end)) {
+    const isHighlighted = currentRanges.some(r => idx >= r.start && idx <= r.end);
+    if (isHighlighted) {
       el.classList.add('tm-highlighted');
     }
+    el.setAttribute('aria-pressed', String(isHighlighted));
   });
 }
 
