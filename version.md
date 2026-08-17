@@ -8,11 +8,17 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. `friction_pool_schema.sql` is not tracked in git, so any entry that changed the schema is flagged (**schema**) as a reminder to re-run it against Supabase.
 
-**Current version: 2.1.0**
+**Current version: 2.1.1**
 
 ---
 
 ## Log
+
+### 2.1.1 — 2026-08-17 — **schema**
+Moved to a new Supabase installation (`wlpbromzijkegqlbytew.supabase.co`). Updated `SUPABASE_URL`
+and `SUPABASE_ANON_KEY` in `kyomei-admin.html`, `kyomei.html`, and `kyomei-display.html`, and set
+the admin login email in `is_admin()` in `friction_pool_schema.sql`. Schema needs a manual run
+against the new project (it was never run there before, not just re-run).
 
 ### 2.1.0 — 2026-08-05 — **schema**
 Text Markup — two new tutor-controlled heatmap toggles, broadcast to the display screen the same
