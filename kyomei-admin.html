@@ -749,10 +749,15 @@
         </div>
       </div>
 
-      <h2 id="results-heading">Live feed</h2>
+      <div class="top-row">
+        <h2 id="results-heading">Live feed</h2>
+        <button class="ghost hidden" type="button" id="parked-toggle-btn">Parked (<span id="parked-count">0</span>)</button>
+      </div>
       <div id="feed-view-mode-indicator" class="feed-view-mode-indicator hidden">Grouped by category (press G to toggle)</div>
       <div id="feed" class="feed"></div>
       <div id="feed-empty" class="empty-feed">Waiting for submissions…</div>
+      <div id="parked-list" class="feed hidden"></div>
+      <div id="parked-empty" class="empty-feed hidden">No parked responses.</div>
       <div id="quicktap-results-controls" class="results-controls hidden">
         <button class="ghost" type="button" id="reveal-toggle-btn">Reveal results</button>
       </div>
@@ -1732,7 +1737,11 @@ function updateRevealUI() {
     hiddenStatus.classList.add('hidden');
     renderRunningOrderViewControls();
   } else {
-    grid.classList.toggle('hidden', !resultsRevealed);
+    // Quick Tap — admin sees live results as they come in regardless of
+    // reveal state; resultsRevealed only gates what the room's display
+    // screen shows (kyomei-display.html gates its own grid on this flag).
+    hiddenStatus.classList.add('hidden');
+    grid.classList.remove('hidden');
     tmCount.classList.add('hidden');
     mvTimeline.classList.add('hidden');
   }
@@ -1834,8 +1843,8 @@ function applyGuidedVisibility() {
   const showFeed = !currentSession.quick_tap_enabled && (!isGuided || hasActiveCategory);
 
   document.getElementById('guided-waiting-status').classList.toggle('hidden', !(isGuided && !hasActiveCategory));
-  document.getElementById('feed').classList.toggle('hidden', !showFeed);
-  if (!showFeed) {
+  document.getElementById('feed').classList.toggle('hidden', !showFeed || showingParked);
+  if (!showFeed || showingParked) {
     document.getElementById('feed-empty').classList.add('hidden');
   } else {
     updateEmptyFeedState();
@@ -3030,6 +3039,15 @@ async function enterSession(session) {
   document.getElementById('mediavote-panel').classList.toggle('hidden', !isMediaVote);
   document.getElementById('runningorder-panel').classList.toggle('hidden', !isRunningOrder);
 
+  // Park/unpark only applies to friction_pool-based sessions (plain text or
+  // guided) — same gate as feedGroupedApplies above.
+  showingParked = false;
+  document.getElementById('parked-list').classList.add('hidden');
+  document.getElementById('parked-empty').classList.add('hidden');
+  document.getElementById('parked-toggle-btn').classList.toggle('hidden', isRunningOrder || isQuickTap || isTextMarkup || isMediaVote);
+  parkedCount = 0;
+  updateParkedCountBadge();
+
   const headingEl = document.getElementById('quicktap-heading-display');
   if (isQuickTap && session.quick_tap_heading) {
     headingEl.textContent = session.quick_tap_heading;
@@ -3156,6 +3174,7 @@ async function enterSession(session) {
 
     await loadInitialFeed();
     setupFeedSubscription();
+    await loadParkedCount();
   }
 
   updateModeBadge();
@@ -3875,6 +3894,153 @@ function updateEmptyFeedState() {
   empty.classList.toggle('hidden', entryElements.size > 0);
 }
 
+// ---------------- Parked responses (park/unpark) ----------------
+// Parked count is tracked locally (incremented/decremented by this tab's own
+// park/unpark/delete actions) rather than kept live via realtime — matches
+// the rest of this admin console's single-tutor-tab assumption.
+let parkedCount = 0;
+let showingParked = false;
+
+// No-ops while the parked list is open — the button reads "back to feed"
+// then, with no count span to update, until toggleParkedView() closes it.
+function updateParkedCountBadge() {
+  if (showingParked) return;
+  document.getElementById('parked-toggle-btn').innerHTML = `Parked (<span id="parked-count">${parkedCount}</span>)`;
+}
+
+async function loadParkedCount() {
+  const { count, error } = await supabaseClient
+    .from('friction_pool')
+    .select('id', { count: 'exact', head: true })
+    .eq('session_id', currentSession.id)
+    .eq('status', 'parked');
+
+  if (error) {
+    handleQueryError(error);
+    return;
+  }
+  parkedCount = count || 0;
+  updateParkedCountBadge();
+}
+
+function renderParkedEntry(row, categoryLabel) {
+  const listEl = document.getElementById('parked-list');
+  const entry = document.createElement('div');
+  entry.className = 'feed-entry';
+  entry.dataset.id = row.id;
+  const color = colorForCategory(categoryLabel || '');
+  entry.style.borderLeftColor = color;
+  entry.innerHTML = `
+    <div>
+      <div class="cat-label" style="color:${color}">${escapeHtml(categoryLabel || '')}</div>
+      <div class="scenario">${escapeHtml(row.scenario)}</div>
+    </div>
+    <div class="feed-controls">
+      <button class="ghost unpark-btn">Unpark</button>
+      <button class="danger delete-btn">Delete</button>
+    </div>
+  `;
+
+  entry.querySelector('.unpark-btn').addEventListener('click', () => unparkEntry(row.id));
+
+  const deleteBtn = entry.querySelector('.delete-btn');
+  let confirming = false;
+  deleteBtn.addEventListener('click', () => {
+    if (!confirming) {
+      confirming = true;
+      deleteBtn.textContent = 'Confirm delete?';
+      setTimeout(() => {
+        if (confirming) {
+          confirming = false;
+          deleteBtn.textContent = 'Delete';
+        }
+      }, 3000);
+      return;
+    }
+    deleteParkedEntry(row.id);
+  });
+
+  listEl.appendChild(entry);
+}
+
+async function loadParkedList() {
+  const listEl = document.getElementById('parked-list');
+  listEl.innerHTML = '';
+
+  const { data, error } = await supabaseClient
+    .from('friction_pool')
+    .select('*, session_categories(label)')
+    .eq('session_id', currentSession.id)
+    .eq('status', 'parked')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    handleQueryError(error);
+    return;
+  }
+
+  for (const row of (data || [])) {
+    renderParkedEntry(row, row.session_categories ? row.session_categories.label : '');
+  }
+  document.getElementById('parked-empty').classList.toggle('hidden', (data || []).length > 0);
+}
+
+async function toggleParkedView() {
+  showingParked = !showingParked;
+
+  if (showingParked) {
+    document.getElementById('parked-toggle-btn').textContent = '← Back to feed';
+    document.getElementById('feed').classList.add('hidden');
+    document.getElementById('feed-empty').classList.add('hidden');
+    document.getElementById('feed-view-mode-indicator').classList.add('hidden');
+    document.getElementById('parked-list').classList.remove('hidden');
+    await loadParkedList();
+  } else {
+    updateParkedCountBadge();
+    document.getElementById('parked-list').classList.add('hidden');
+    document.getElementById('parked-empty').classList.add('hidden');
+    applyFeedViewMode();
+    updateFeedViewModeIndicator();
+  }
+}
+
+async function unparkEntry(id) {
+  const { error } = await supabaseClient
+    .from('friction_pool')
+    .update({ status: 'active' })
+    .eq('id', id);
+
+  if (error) {
+    handleQueryError(error);
+    return;
+  }
+  removeParkedListEntry(id);
+}
+
+async function deleteParkedEntry(id) {
+  const { error } = await supabaseClient
+    .from('friction_pool')
+    .update({ status: 'deleted' })
+    .eq('id', id);
+
+  if (error) {
+    handleQueryError(error);
+    return;
+  }
+  removeParkedListEntry(id);
+}
+
+function removeParkedListEntry(id) {
+  const listEl = document.getElementById('parked-list');
+  const el = listEl.querySelector(`[data-id="${id}"]`);
+  if (el) el.remove();
+  parkedCount = Math.max(0, parkedCount - 1);
+  updateParkedCountBadge();
+  document.getElementById('parked-empty').classList.toggle('hidden', listEl.children.length > 0);
+}
+
+document.getElementById('parked-toggle-btn').addEventListener('click', toggleParkedView);
+
 function addFeedEntry(row, categoryLabel, applyView = true) {
   if (entryElements.has(row.id)) return;
   const feedEl = document.getElementById('feed');
@@ -4049,6 +4215,10 @@ async function moderateEntry(id, status) {
   if (error) {
     handleQueryError(error);
     return;
+  }
+  if (status === 'parked') {
+    parkedCount += 1;
+    updateParkedCountBadge();
   }
   removeFeedEntry(id);
 }
@@ -4510,7 +4680,7 @@ function applyChartTypeVisibility() {
 }
 
 async function cycleChartType() {
-  if (!currentSession || !currentSession.quick_tap_enabled || !resultsRevealed) return;
+  if (!currentSession || !currentSession.quick_tap_enabled) return;
   if (CHART_TYPES.length <= 1) return; // traffic-light / confidence sessions have nothing to cycle to
   const previous = chartType;
   const idx = CHART_TYPES.indexOf(chartType);

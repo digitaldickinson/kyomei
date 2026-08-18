@@ -8,11 +8,26 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. `friction_pool_schema.sql` is not tracked in git, so any entry that changed the schema is flagged (**schema**) as a reminder to re-run it against Supabase.
 
-**Current version: 2.1.1**
+**Current version: 2.2.1**
 
 ---
 
 ## Log
+
+### 2.2.1 — 2026-08-18
+Quick Tap — admin's own results view (buttons/bar/pie/traffic-light/sparkline) was wrongly gated
+behind `resultsRevealed`, the same flag that controls whether the room's display screen shows the
+tally. Underlying data was always live (the realtime tally subscription and chart-cycle spacebar
+shortcut both updated regardless), but the admin console hid the whole `tally-grid` and blocked
+chart cycling until "Reveal results" was clicked. Admin's tally view is now always visible and
+cyclable; `resultsRevealed` continues to gate only what `kyomei-display.html` shows, unchanged.
+
+### 2.2.0 — 2026-08-18
+Text/Guided sessions — parking a response is no longer a one-way trip. Added a "Parked (N)" toggle
+next to the live feed that opens a list of parked responses, each with an Unpark button (sets
+`friction_pool.status` back to `active`, which flows straight back into the live feed via the
+existing realtime subscription) alongside the same type-to-confirm Delete already used in the main
+feed. No schema change — reuses the existing `active`/`parked`/`deleted` status column.
 
 ### 2.1.1 — 2026-08-17 — **schema**
 Moved to a new Supabase installation (`wlpbromzijkegqlbytew.supabase.co`). Updated `SUPABASE_URL`
