@@ -695,6 +695,59 @@ const SUPABASE_ANON_KEY = 'sb_publishable_dg2m3ukxrohfX-IWL1IPMw_iJvd7wn3';
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// ---------------- Async lifecycle (kept inline for standalone deployment) ----------------
+const viewRequests = new Map();
+let viewRequestSequence = 0;
+function beginViewRequest(key, scope = () => currentSession && currentSession.id) {
+  const token = ++viewRequestSequence;
+  viewRequests.set(key, token);
+  const initialScope = scope();
+  return () => viewRequests.get(key) === token && scope() === initialScope;
+}
+function cancelViewRequests() { viewRequests.clear(); }
+function releaseSubscription(channel, timer) {
+  if (timer) clearTimeout(timer);
+  if (channel) supabaseClient.removeChannel(channel);
+}
+// One lifecycle for session controls: subscribe, refresh after reconnect,
+// retry after interruption, and dispose without restarting a closed view.
+function watchSession(sessionId, onRow, onStatus = () => {}) {
+  let channel = null, timer = null, stopped = false, refreshSequence = 0;
+  async function refresh() {
+    const sequence = ++refreshSequence;
+    const { data, error } = await supabaseClient.from('sessions').select('*').eq('id', sessionId).maybeSingle();
+    if (stopped || sequence !== refreshSequence) return;
+    if (error) { onStatus(false); return; }
+    if (data) { onStatus(true); await onRow(data, true); }
+  }
+  function connect() {
+    if (stopped) return;
+    const previous = channel;
+    channel = null;
+    if (previous) supabaseClient.removeChannel(previous);
+    const next = supabaseClient.channel(`controls_${sessionId}_${Math.random().toString(36).slice(2)}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${sessionId}` }, async payload => {
+        if (stopped || channel !== next) return;
+        ++refreshSequence; // a stale refresh must not undo a newer realtime row
+        await onRow(payload.new);
+      });
+    channel = next;
+    next.subscribe(status => {
+      if (stopped || channel !== next) return;
+      if (status === 'SUBSCRIBED') { if (timer) clearTimeout(timer); timer = null; refresh(); }
+      else if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) {
+        onStatus(false);
+        if (!timer) timer = setTimeout(() => { timer = null; connect(); }, 3000);
+      }
+    });
+  }
+  const online = () => refresh();
+  window.addEventListener('online', online);
+  connect();
+  return () => { stopped = true; ++refreshSequence; window.removeEventListener('online', online); releaseSubscription(channel, timer); };
+}
+
+
 const CATEGORY_PALETTE = [
   '#5b8cff', '#ff8a5b', '#48c78e', '#e05bff',
   '#ffd45b', '#5bd1ff', '#ff5b8a', '#8aff5b'
@@ -852,6 +905,7 @@ async function fetchCategoryLabel(categoryId) {
 }
 
 async function loadFeed() {
+  const requestIsCurrent = beginViewRequest('loadFeed', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, [activeCategoryId,currentSession.feed_revision]]));
   const listEl = document.getElementById('feed-list');
 
   let query = supabaseClient
@@ -865,6 +919,7 @@ async function loadFeed() {
   }
 
   const { data, error } = await query.order('created_at', { ascending: false });
+  if (!requestIsCurrent()) return;
 
   feedEntries.clear();
   feedEntryMeta = [];
@@ -924,12 +979,14 @@ let feedEntryMeta = []; // mirrors feedEntries' insertion order (newest first), 
 let plainFeedCategories = null; // lazy-loaded on first switch to grouped view
 
 async function ensurePlainFeedCategoriesLoaded() {
+  const requestIsCurrent = beginViewRequest('ensurePlainFeedCategoriesLoaded', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, feedViewMode]));
   if (plainFeedCategories) return plainFeedCategories;
   const { data, error } = await supabaseClient
     .from('session_categories')
     .select('*')
     .eq('session_id', currentSession.id)
     .order('sort_order', { ascending: true });
+  if (!requestIsCurrent()) return;
   plainFeedCategories = error ? [] : (data || []);
   return plainFeedCategories;
 }
@@ -1031,43 +1088,12 @@ let feedReconnectTimer = null;
 
 function setupFeedSubscription() {
   teardownFeedSubscription();
-
-  feedChannel = supabaseClient
-    .channel(`display_feed_${currentSession.id}`)
-    .on('postgres_changes', {
-      event: 'INSERT',
-      schema: 'public',
-      table: 'friction_pool',
-      filter: `session_id=eq.${currentSession.id}`
-    }, async (payload) => {
-      if (payload.new.status !== 'active') return;
-      if (displayMode === 'guided' && payload.new.category_id !== activeCategoryId) return;
-      const label = await fetchCategoryLabel(payload.new.category_id);
-      addFeedEntry(payload.new, label);
-    })
-    .on('postgres_changes', {
-      event: 'UPDATE',
-      schema: 'public',
-      table: 'friction_pool',
-      filter: `session_id=eq.${currentSession.id}`
-    }, async (payload) => {
-      if (payload.new.status === 'active') {
-        if (displayMode === 'guided' && payload.new.category_id !== activeCategoryId) return;
-        if (!feedEntries.has(payload.new.id)) {
-          const label = await fetchCategoryLabel(payload.new.category_id);
-          addFeedEntry(payload.new, label);
-        }
-      } else {
-        removeFeedEntry(payload.new.id);
-      }
-    })
-    .subscribe((status) => {
-      if (status === 'SUBSCRIBED') {
-        setConnectionStatus('feed', true);
-      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-        setConnectionStatus('feed', false);
-        scheduleFeedReconnect();
-      }
+  feedChannel = supabaseClient.channel(`display_feed_${currentSession.id}`)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'friction_pool', filter: `session_id=eq.${currentSession.id}` }, () => loadFeed())
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'friction_pool', filter: `session_id=eq.${currentSession.id}` }, () => loadFeed())
+    .subscribe(status => {
+      if (status === 'SUBSCRIBED') { setConnectionStatus('feed', true); loadFeed(); }
+      else if (['CHANNEL_ERROR','TIMED_OUT','CLOSED'].includes(status)) { setConnectionStatus('feed', false); scheduleFeedReconnect(); }
     });
 }
 
@@ -1080,14 +1106,10 @@ function scheduleFeedReconnect() {
 }
 
 function teardownFeedSubscription() {
-  if (feedChannel) {
-    supabaseClient.removeChannel(feedChannel);
-    feedChannel = null;
-  }
-  if (feedReconnectTimer) {
-    clearTimeout(feedReconnectTimer);
-    feedReconnectTimer = null;
-  }
+  const channel = feedChannel, timer = feedReconnectTimer;
+  feedChannel = null;
+  feedReconnectTimer = null;
+  releaseSubscription(channel, timer);
 }
 
 // ---------------- Plain text feed mode ----------------
@@ -1529,11 +1551,13 @@ function incrementQuickTapCount(row) {
 }
 
 async function loadQuickTapCounts() {
+  const requestIsCurrent = beginViewRequest('loadQuickTapCounts', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, resultsRevealed]));
   const { data, error } = await supabaseClient
     .from('quick_tap_responses')
     .select('id, option_id, device_id, created_at')
     .eq('session_id', currentSession.id)
     .order('created_at', { ascending: true });
+  if (!requestIsCurrent()) return;
 
   quickTapResponseLog = error ? [] : (data || []);
   quickTapCounts = {};
@@ -1646,14 +1670,10 @@ function scheduleQuickTapReconnect() {
 }
 
 function teardownQuickTapResponsesSubscription() {
-  if (quickTapChannel) {
-    supabaseClient.removeChannel(quickTapChannel);
-    quickTapChannel = null;
-  }
-  if (quickTapReconnectTimer) {
-    clearTimeout(quickTapReconnectTimer);
-    quickTapReconnectTimer = null;
-  }
+  const channel = quickTapChannel, timer = quickTapReconnectTimer;
+  quickTapChannel = null;
+  quickTapReconnectTimer = null;
+  releaseSubscription(channel, timer);
 }
 
 // ---------------- Text markup display mode ----------------
@@ -1986,11 +2006,13 @@ async function renderTextMarkupDisplayState() {
 }
 
 async function loadTextMarkupAggregate() {
+  const requestIsCurrent = beginViewRequest('loadTextMarkupAggregate', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, [textMarkupActivePromptId,textMarkupComparePromptId,resultsRevealed]]));
   const { data, error } = await supabaseClient
     .from('text_markup_responses')
     .select('spans')
     .eq('session_id', currentSession.id)
     .eq('prompt_id', textMarkupActivePromptId);
+  if (!requestIsCurrent()) return;
 
   textMarkupResponses = error ? [] : (data || []);
   updateTextMarkupTotalCount();
@@ -2010,6 +2032,7 @@ async function loadTextMarkupAggregate() {
       .select('spans')
       .eq('session_id', currentSession.id)
       .eq('prompt_id', textMarkupComparePromptId);
+  if (!requestIsCurrent()) return;
     const compareResponses = compareError ? [] : (compareData || []);
     const compareCounts = computeTextMarkupWordCounts(compareResponses, textMarkupWords.length);
     renderTextMarkupHeatmap(compareCounts, 'textmarkup-display-heatmap-view-b');
@@ -2073,14 +2096,10 @@ function scheduleTextMarkupResponsesReconnect() {
 }
 
 function teardownTextMarkupResponsesSubscription() {
-  if (textMarkupResponsesChannel) {
-    supabaseClient.removeChannel(textMarkupResponsesChannel);
-    textMarkupResponsesChannel = null;
-  }
-  if (textMarkupResponsesReconnectTimer) {
-    clearTimeout(textMarkupResponsesReconnectTimer);
-    textMarkupResponsesReconnectTimer = null;
-  }
+  const channel = textMarkupResponsesChannel, timer = textMarkupResponsesReconnectTimer;
+  textMarkupResponsesChannel = null;
+  textMarkupResponsesReconnectTimer = null;
+  releaseSubscription(channel, timer);
 }
 
 // ---------------- Media Vote: local file picker (shared: session clip + standalone test) ----------------
@@ -2496,6 +2515,7 @@ function stopDisplayPlayheadTicker() {
 }
 
 async function loadMediaVoteTimelineData() {
+  const requestIsCurrent = beginViewRequest('loadMediaVoteTimelineData', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, resultsRevealed]));
   const [eventsRes, votesRes, optionsRes] = await Promise.all([
     supabaseClient
       .from('media_transport_events')
@@ -2513,6 +2533,7 @@ async function loadMediaVoteTimelineData() {
       .eq('session_id', currentSession.id)
       .order('sort_order', { ascending: true })
   ]);
+  if (!requestIsCurrent()) return;
 
   mediaVoteRawEvents = eventsRes.data || [];
   mediaVoteRawResponses = votesRes.data || [];
@@ -2674,14 +2695,10 @@ function scheduleMediaVoteResponsesReconnect() {
 }
 
 function teardownMediaVoteResponsesSubscription() {
-  if (mediaVoteResponsesChannel) {
-    supabaseClient.removeChannel(mediaVoteResponsesChannel);
-    mediaVoteResponsesChannel = null;
-  }
-  if (mediaVoteResponsesReconnectTimer) {
-    clearTimeout(mediaVoteResponsesReconnectTimer);
-    mediaVoteResponsesReconnectTimer = null;
-  }
+  const channel = mediaVoteResponsesChannel, timer = mediaVoteResponsesReconnectTimer;
+  mediaVoteResponsesChannel = null;
+  mediaVoteResponsesReconnectTimer = null;
+  releaseSubscription(channel, timer);
 }
 
 // ---------------- Standalone playback test mode ----------------
@@ -2805,6 +2822,25 @@ document.getElementById('video-test-close-btn').addEventListener('click', () => 
 // change post-reveal except the tutor's ranking_view_mode/
 // active_ranking_team_id picks, which the shared sessions subscription
 // below already watches.
+let rankingResultsChannel = null;
+let rankingResultsTimer = null;
+function setupRankingResultsSubscription() {
+  releaseSubscription(rankingResultsChannel, rankingResultsTimer);
+  rankingResultsTimer = null;
+  const channel = supabaseClient.channel(`display_ranking_${currentSession.id}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'ranking_submissions', filter: `session_id=eq.${currentSession.id}` }, () => {
+      if (resultsRevealed) renderRunningOrderDisplayState();
+    });
+  rankingResultsChannel = channel;
+  channel.subscribe(status => {
+    if (rankingResultsChannel !== channel) return;
+    if (status === 'SUBSCRIBED') { setConnectionStatus('ranking', true); if (resultsRevealed) renderRunningOrderDisplayState(); }
+    else if (['CHANNEL_ERROR','TIMED_OUT','CLOSED'].includes(status)) {
+      setConnectionStatus('ranking', false);
+      if (!rankingResultsTimer) rankingResultsTimer = setTimeout(setupRankingResultsSubscription, 3000);
+    }
+  });
+}
 async function initRunningOrderDisplay(session) {
   const { data: items, error } = await supabaseClient
     .from('ranking_items')
@@ -2827,6 +2863,7 @@ async function initRunningOrderDisplay(session) {
   await renderRunningOrderDisplayState();
 
   setupSessionsSubscription();
+  setupRankingResultsSubscription();
 }
 
 async function renderRunningOrderDisplayState() {
@@ -2859,6 +2896,7 @@ async function renderRunningOrderDisplayState() {
 }
 
 async function renderRunningOrderTeamView() {
+  const requestIsCurrent = beginViewRequest('renderRunningOrderTeamView', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, [activeRankingTeamId,rankingViewMode,resultsRevealed]]));
   const listEl = document.getElementById('runningorder-display-team-list');
   listEl.innerHTML = '';
 
@@ -2867,6 +2905,7 @@ async function renderRunningOrderTeamView() {
     .select('final_order')
     .eq('team_id', activeRankingTeamId)
     .maybeSingle();
+  if (!requestIsCurrent()) return;
 
   if (error || !submission) return;
 
@@ -2887,17 +2926,18 @@ async function renderRunningOrderTeamView() {
 }
 
 async function renderRunningOrderAggregateView() {
-  const { data: submissions } = await supabaseClient
-    .from('ranking_submissions')
-    .select('final_order')
-    .eq('session_id', currentSession.id);
+  const requestIsCurrent = beginViewRequest('renderRunningOrderAggregateView', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, [activeRankingTeamId,rankingViewMode,resultsRevealed]]));
+  const { data: submissions } = await supabaseClient.rpc('get_current_ranking_submissions', { p_session_id: currentSession.id });
+  if (!requestIsCurrent()) return;
 
   const { data: moveCounts } = await supabaseClient.rpc('get_ranking_item_move_counts', {
     p_session_id: currentSession.id
   });
+  if (!requestIsCurrent()) return;
   const { data: reversals } = await supabaseClient.rpc('get_ranking_pair_reversals', {
     p_session_id: currentSession.id
   });
+  if (!requestIsCurrent()) return;
 
   renderRunningOrderAveragePosition(submissions || []);
   renderRunningOrderMoveCounts(moveCounts || []);
@@ -2975,20 +3015,24 @@ function renderRunningOrderReversals(reversals) {
 }
 
 // ---------------- Sessions subscription (guided category switches + reveal flips) ----------------
-let sessionsChannel = null;
-let sessionsReconnectTimer = null;
 
+let stopDisplaySession = null;
 function setupSessionsSubscription() {
   teardownSessionsSubscription();
+  stopDisplaySession = watchSession(currentSession.id, async (row, refreshed = false) => {
+      const updateIsCurrent = beginViewRequest('display-session-update');
+      const payload = { new: row };
+      if ((row.response_epoch || 0) !== (currentSession.response_epoch || 0)) {
+        cancelViewRequests();
+        window.location.reload();
+        return;
+      }
+      if ((displayMode === 'plain' || displayMode === 'guided') && row.feed_revision !== currentSession.feed_revision) {
+        currentSession.feed_revision = row.feed_revision;
+        await loadFeed();
+      if (!updateIsCurrent()) return;
+      }
 
-  sessionsChannel = supabaseClient
-    .channel(`display_session_${currentSession.id}`)
-    .on('postgres_changes', {
-      event: 'UPDATE',
-      schema: 'public',
-      table: 'sessions',
-      filter: `id=eq.${currentSession.id}`
-    }, async (payload) => {
       // Applies regardless of displayMode — a session's join-info overlay
       // can be summoned during a feed, a tally, a guided category, any of
       // it — shown/hidden on top without disturbing what's underneath.
@@ -3008,6 +3052,7 @@ function setupSessionsSubscription() {
       if (newFeedGrouped !== !!currentSession.feed_grouped) {
         currentSession.feed_grouped = newFeedGrouped;
         await setFeedGrouped(newFeedGrouped);
+      if (!updateIsCurrent()) return;
       }
 
       if (displayMode === 'guided') {
@@ -3018,6 +3063,7 @@ function setupSessionsSubscription() {
           if (activeCategoryId) {
             updateGuidedCategoryLabel();
             await loadFeed();
+      if (!updateIsCurrent()) return;
           } else {
             renderIdleScreen();
           }
@@ -3030,6 +3076,7 @@ function setupSessionsSubscription() {
           updateQuickTapVisibility();
           if (resultsRevealed) {
             await loadQuickTapCounts();
+      if (!updateIsCurrent()) return;
           }
         }
 
@@ -3083,12 +3130,14 @@ function setupSessionsSubscription() {
         }
         if (promptChanged || revealChanged || compareChanged) {
           await renderTextMarkupDisplayState();
+      if (!updateIsCurrent()) return;
         } else if (heatmapModeChanged || paletteChanged) {
           // Mode/palette only change the heatmap's colors, not which data
           // is shown — recompute from the DB rather than caching compare
           // responses locally just for this, same "refetch is cheap at
           // classroom scale" reasoning used elsewhere in this file.
           if (resultsRevealed) await loadTextMarkupAggregate();
+      if (!updateIsCurrent()) return;
         }
 
         // Only apply a genuine cycle broadcast — not the same event's
@@ -3121,6 +3170,7 @@ function setupSessionsSubscription() {
           currentSession.results_revealed = newRevealed;
           if (resultsRevealed) {
             await loadMediaVoteTimelineData();
+      if (!updateIsCurrent()) return;
             renderMediaVoteDisplayTimeline();
           }
           // The video/player itself is untouched here — only the timeline
@@ -3151,36 +3201,29 @@ function setupSessionsSubscription() {
         }
         if (revealChanged || viewChanged) {
           await renderRunningOrderDisplayState();
+      if (!updateIsCurrent()) return;
         }
       }
-    })
-    .subscribe((status) => {
-      if (status === 'SUBSCRIBED') {
-        setConnectionStatus('sessions', true);
-      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-        setConnectionStatus('sessions', false);
-        scheduleSessionsReconnect();
+    if (refreshed) {
+      if (displayMode === 'plain' || displayMode === 'guided') {
+        await loadFeed();
+      } else if (resultsRevealed && displayMode === 'quicktap') {
+        await loadQuickTapCounts();
+      } else if (resultsRevealed && displayMode === 'textmarkup') {
+        await loadTextMarkupAggregate();
+      } else if (resultsRevealed && displayMode === 'runningorder') {
+        await renderRunningOrderDisplayState();
+      } else if (resultsRevealed && displayMode === 'mediavote') {
+        await loadMediaVoteTimelineData();
+        if (!updateIsCurrent()) return;
+        renderMediaVoteDisplayTimeline();
       }
-    });
+    }
+  }, connected => setConnectionStatus('sessions', connected));
 }
-
-function scheduleSessionsReconnect() {
-  if (sessionsReconnectTimer) return;
-  sessionsReconnectTimer = setTimeout(() => {
-    sessionsReconnectTimer = null;
-    if (currentSession) setupSessionsSubscription();
-  }, 3000);
-}
-
 function teardownSessionsSubscription() {
-  if (sessionsChannel) {
-    supabaseClient.removeChannel(sessionsChannel);
-    sessionsChannel = null;
-  }
-  if (sessionsReconnectTimer) {
-    clearTimeout(sessionsReconnectTimer);
-    sessionsReconnectTimer = null;
-  }
+  if (stopDisplaySession) stopDisplaySession();
+  stopDisplaySession = null;
 }
 
 init();

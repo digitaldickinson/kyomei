@@ -59,3 +59,15 @@ channel subscriptions.
 ## Running locally
 
 These are static HTML files with no build step. But you will need to run them from a sever that everyone can access. For example, use GitHub Pages or Netify drop -  https://app.netlify.com/drop 
+
+## Reliability and session workflows (2.3.0)
+
+Each page remains self-contained, with no new runtime assets or build step.
+
+- Admin can open/close submissions independently of revealing results, duplicate a session with fresh responses, and export results as CSV.
+- Student pages show connection and submission status and retain unfinished text, highlights, and ranking order locally. Drafts and the one-vote lock belong to a particular reset round.
+- Session creation, duplication, and reset run as database transactions.
+
+Apply the [database migration](migrations/README.md) before publishing these pages. The database baseline and ordered migrations are now tracked in `migrations/`; the original local schema file remains ignored.
+
+See [local verification](tests/README.md) for the optional development tests. Tests add no browser dependencies.

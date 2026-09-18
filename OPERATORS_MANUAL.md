@@ -174,7 +174,7 @@ whenever you freshly reveal results.
 Running Order is self-contained — it doesn't use the live feed, chart cycling, or the shared
 reveal button described below; it has its own panel with its own **Reveal results** button.
 
-- **Team activity** — a running summary: "N active · N submitted · N total seen." Active means a
+- **Team activity** — a running summary: "N active · N submitted · N current teams." Active means a
   team hasn't submitted and has moved an item in the last 5 minutes.
 - **Reveal results** — gates the display the same way it does for other session types: nothing
   about team progress is shown to the room until you click it.
@@ -222,12 +222,21 @@ Once results are revealed, **Space** cycles the aggregate view:
 
 ## 5. Ending or clearing a session
 
+### Collection, reuse, and export
+
+- **Close submissions / Open submissions** — controls whether students can send responses for every session type. This is independent of **Reveal results**, including Running Order. Close collection before discussing a fixed set of results; reopening keeps existing responses and drafts.
+- **Duplicate session** — opens a form for the new name and unique code. Copies categories, buttons, passage, prompts, story items, and display settings. The new session starts open, unrevealed, and without responses, team claims, active selections, or playback state. A local media file must be selected on the new display.
+- **Export CSV** — downloads collected results for the session, including labels and timestamps. Text markup includes its passage and word-index spans; Media Vote includes transport events; Running Order includes submissions and move history, with superseded teams labelled. Device IDs are not exported. Close submissions first when you need a stable snapshot; export reads may otherwise overlap new responses.
+
+### Reset and removal
+
+
 - **Reset responses** — click once to arm ("Confirm reset?"), click again within 3 seconds to
   execute. Deletes all collected responses and transport-event history, hides results again, and
   clears any active guided category / active prompt / media transport state. For Running Order,
   this also clears team claims, moves, and submissions — teams need to rejoin with a team name
   afterward. **Configuration (categories, options, passage, prompts, story items) is untouched** —
-  the session is ready to run again from scratch.
+  open student/display tabs reload into a fresh round, with old drafts and vote locks ignored. The current open/closed collection setting is preserved; click **Open submissions** if needed.
 - **Archive / Unarchive** — from the session list (§2); doesn't touch data.
 - **Delete permanently** — top bar or session-list button. Opens a confirmation showing exactly how
   many responses and configuration items will be lost. You must type the session's exact **session
@@ -256,3 +265,9 @@ Once results are revealed, **Space** cycles the aggregate view:
 ---
 
 *kyomei — Facilitation software by Andy Dickinson · a.dickinson@mmu.ac.uk*
+
+## 7. Student connection and drafts
+
+The student page distinguishes connection state from submission receipt: **Sending…**, **Received.**, or a failure message. Offline work is not automatically submitted when connectivity returns. If receipt is not confirmed, check the connection before retrying.
+
+Unfinished text, highlights for each prompt, and ranking order are saved in the browser. Refreshing restores these drafts in the same round. A tutor reset starts a new round and ignores old drafts. Submitted rankings are restored as submitted rather than reopening an editable blank order. Browser storage restrictions can prevent drafts surviving a page reload.

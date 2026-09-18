@@ -6,13 +6,20 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 - **MINOR** — a new feature within an existing session type (a new stage, a new control, a new broadcast field).
 - **PATCH** — a bug fix, a copy/layout tweak, or a schema addition that only supports a fix above.
 
-Update this file with each change that ships — bump the version, add an entry at the top of the log below. `friction_pool_schema.sql` is not tracked in git, so any entry that changed the schema is flagged (**schema**) as a reminder to re-run it against Supabase.
+Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.2.1**
+**Current version: 2.3.0**
 
 ---
 
 ## Log
+
+### 2.3.0 — 2026-09-16 — **schema**
+Added independent open/close collection controls, session duplication with fresh responses, and paginated CSV export. Student pages show connection/receipt status and preserve text, prompt highlights, and ranking drafts locally; reset rounds isolate stale drafts and vote locks. Running Order uses the explicit collection switch rather than reveal to freeze submissions.
+
+Fixed display moderation invalidation, transactional Running Order reset, delayed text-markup restore races, and superseded-team aggregates. Creation (including Pulse Checks), duplication, and reset are now authorized database transactions. Inline lifecycle helpers consolidate session monitoring and cleanup; view request guards discard delayed results after navigation or selection changes. Pages remain self-contained with no new runtime dependencies.
+
+Added a sanitised tracked baseline, ordered migration, deployment instructions, and calculation/DOM/database regression tests. Apply `migrations/002_reliability_and_workflows.sql` to existing installations before deploying the updated HTML pages. Production Supabase was not modified by this code change.
 
 ### 2.2.1 — 2026-08-18
 Quick Tap — admin's own results view (buttons/bar/pie/traffic-light/sparkline) was wrongly gated

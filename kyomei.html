@@ -298,6 +298,13 @@
 </style>
 </head>
 <body>
+<div style="max-width:480px;margin:12px auto;padding:0 16px" aria-live="polite" role="status">
+  <div id="student-connection-status">Connecting…</div>
+  <button type="button" id="retry-connection-btn" hidden>Retry connection</button>
+  <div id="student-submission-status"></div>
+  <div id="student-collection-status"></div>
+</div>
+<fieldset id="student-activity" style="border:0;padding:0;margin:0;min-width:0">
 <div class="wrap">
 
   <div id="loading-screen">Loading session…</div>
@@ -336,7 +343,6 @@
 
     <div class="session-name-header">Session: <strong id="guided-session-name-display"></strong></div>
 
-    <div id="guided-reconnect-banner" class="connection-banner hidden">Reconnecting…</div>
 
     <div id="guided-waiting-status" class="hidden-status hidden">Waiting for your tutor to start</div>
 
@@ -359,7 +365,6 @@
 
     <div class="session-name-header">Session: <strong id="textmarkup-session-name-display"></strong></div>
 
-    <div id="textmarkup-reconnect-banner" class="connection-banner hidden">Reconnecting…</div>
 
     <div id="textmarkup-waiting-status" class="hidden-status hidden">Waiting for your tutor to start</div>
 
@@ -434,6 +439,7 @@
 
 </div>
 
+</fieldset>
 <script>
 // ======================================================================
 // CONFIG — fill in before deploying. anon/public key only — NEVER the
@@ -445,21 +451,164 @@ const SUPABASE_ANON_KEY = 'sb_publishable_dg2m3ukxrohfX-IWL1IPMw_iJvd7wn3';
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// ---------------- Async lifecycle (kept inline for standalone deployment) ----------------
+const viewRequests = new Map();
+let viewRequestSequence = 0;
+function beginViewRequest(key, scope = () => currentSession && currentSession.id) {
+  const token = ++viewRequestSequence;
+  viewRequests.set(key, token);
+  const initialScope = scope();
+  return () => viewRequests.get(key) === token && scope() === initialScope;
+}
+function cancelViewRequests() { viewRequests.clear(); }
+function releaseSubscription(channel, timer) {
+  if (timer) clearTimeout(timer);
+  if (channel) supabaseClient.removeChannel(channel);
+}
+// One lifecycle for session controls: subscribe, refresh after reconnect,
+// retry after interruption, and dispose without restarting a closed view.
+function watchSession(sessionId, onRow, onStatus = () => {}) {
+  let channel = null, timer = null, stopped = false, refreshSequence = 0;
+  async function refresh() {
+    const sequence = ++refreshSequence;
+    const { data, error } = await supabaseClient.from('sessions').select('*').eq('id', sessionId).maybeSingle();
+    if (stopped || sequence !== refreshSequence) return;
+    if (error) { onStatus(false); return; }
+    if (data) { onStatus(true); await onRow(data, true); }
+  }
+  function connect() {
+    if (stopped) return;
+    const previous = channel;
+    channel = null;
+    if (previous) supabaseClient.removeChannel(previous);
+    const next = supabaseClient.channel(`controls_${sessionId}_${Math.random().toString(36).slice(2)}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${sessionId}` }, async payload => {
+        if (stopped || channel !== next) return;
+        ++refreshSequence; // a stale refresh must not undo a newer realtime row
+        await onRow(payload.new);
+      });
+    channel = next;
+    next.subscribe(status => {
+      if (stopped || channel !== next) return;
+      if (status === 'SUBSCRIBED') { if (timer) clearTimeout(timer); timer = null; refresh(); }
+      else if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) {
+        onStatus(false);
+        if (!timer) timer = setTimeout(() => { timer = null; connect(); }, 3000);
+      }
+    });
+  }
+  const online = () => refresh();
+  window.addEventListener('online', online);
+  connect();
+  return () => { stopped = true; ++refreshSequence; window.removeEventListener('online', online); releaseSubscription(channel, timer); };
+}
+
+
 // A convenience fingerprint, not real identity — persists across every
 // session this browser ever visits, used only so the confidence sparkline
 // can carry forward one value per device instead of counting every retap.
+const memoryStorage = new Map();
+const safeStorage = {
+  getItem(key) { try { return localStorage.getItem(key) ?? memoryStorage.get(key) ?? null; } catch { return memoryStorage.get(key) ?? null; } },
+  setItem(key, value) { memoryStorage.set(key, value); try { localStorage.setItem(key, value); } catch { /* drafts remain available in this tab */ } },
+  removeItem(key) { memoryStorage.delete(key); try { localStorage.removeItem(key); } catch {} }
+};
 function getDeviceId() {
-  let id = localStorage.getItem('kyomei_device_id');
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem('kyomei_device_id', id);
-  }
+  let id = safeStorage.getItem('kyomei_device_id');
+  if (!id) { id = crypto.randomUUID(); safeStorage.setItem('kyomei_device_id', id); }
   return id;
 }
 const deviceId = getDeviceId();
 
 let currentSession = null;
 let currentCategories = [];
+
+// ---------------- Student connection, collection state, and local drafts ----------------
+let stopStudentSession = null;
+let studentLoadFailed = false;
+let studentWrites = 0;
+function draftKey(kind) { return `kyomei_draft_${currentSession.id}_${currentSession.response_epoch || 0}_${kind}`; }
+function readDraft(kind) {
+  try { return JSON.parse(safeStorage.getItem(draftKey(kind)) || 'null'); } catch { return null; }
+}
+function writeDraft(kind, value) { if (currentSession) safeStorage.setItem(draftKey(kind), JSON.stringify(value)); }
+function clearDraft(kind) { if (currentSession) safeStorage.removeItem(draftKey(kind)); }
+function updateStudentAvailability() {
+  const closed = currentSession && currentSession.submissions_open === false;
+  document.getElementById('student-activity').disabled = !!closed;
+  document.getElementById('student-collection-status').textContent = closed ? 'Submissions are closed. Your draft is saved on this device.' : '';
+}
+function showStudentLoadError() {
+  studentLoadFailed = true;
+  showScreen('loading-screen');
+  document.getElementById('loading-screen').textContent = 'Could not load this activity. Retry when connected.';
+  updateStudentConnection(false);
+}
+function updateStudentConnection(connected) {
+  document.getElementById('retry-connection-btn').hidden = connected && !studentLoadFailed;
+  document.getElementById('student-connection-status').textContent = !navigator.onLine
+    ? 'Offline — keep your draft here and reconnect before submitting.'
+    : connected ? 'Connected' : 'Reconnecting — your draft stays on this device.';
+}
+window.addEventListener('offline', () => updateStudentConnection(false));
+document.getElementById('retry-connection-btn').addEventListener('click', () => window.location.reload());
+function submissionErrorMessage(error) {
+  if (error.message === 'OFFLINE') return 'Not sent — reconnect and try again.';
+  if (error.message === 'SUBMISSIONS_CLOSED') return 'Not sent — submissions are closed.';
+  if (error.message === 'SESSION_RESET') return 'The tutor reset this session. Refresh before submitting again.';
+  return 'Receipt not confirmed — check your connection before retrying.';
+}
+async function sendStudentRequest(operation) {
+  const status = document.getElementById('student-submission-status');
+  if (!navigator.onLine || currentSession.submissions_open === false) {
+    const error = { message: !navigator.onLine ? 'OFFLINE' : 'SUBMISSIONS_CLOSED' };
+    status.textContent = submissionErrorMessage(error);
+    return { error };
+  }
+  ++studentWrites;
+  status.textContent = 'Sending…';
+  try {
+    const result = await operation();
+    status.textContent = result.error ? submissionErrorMessage(result.error) : 'Received.';
+    if (result.error && result.error.message === 'SESSION_RESET') document.getElementById('retry-connection-btn').hidden = false;
+    return result;
+  } catch (error) {
+    status.textContent = 'Receipt not confirmed — check your connection before retrying.';
+    return { error };
+  } finally { if (--studentWrites > 0) status.textContent = 'Sending…'; }
+}
+function restoreTextDrafts() {
+  for (const id of ['scenario-input', 'guided-scenario-input']) {
+    const draft = readDraft(id);
+    document.getElementById(id).value = draft && typeof draft.text === 'string' ? draft.text : '';
+  }
+  const category = readDraft('category');
+  if (category && currentCategories.some(c => c.id === category)) document.getElementById('category-select').value = category;
+}
+for (const id of ['scenario-input', 'guided-scenario-input']) {
+  document.getElementById(id).addEventListener('input', event => writeDraft(id, { text: event.target.value }));
+}
+document.getElementById('category-select').addEventListener('change', event => writeDraft('category', event.target.value));
+async function applyStudentSession(row) {
+  if (!currentSession || row.id !== currentSession.id) return;
+  if ((row.response_epoch || 0) !== (currentSession.response_epoch || 0)) {
+    // Reload from the new epoch: neither stale drafts nor in-flight UI callbacks survive.
+    document.getElementById('student-submission-status').textContent = 'Session reset — loading the new round…';
+    window.location.reload();
+    return;
+  }
+  currentSession = row;
+  updateStudentAvailability();
+  if (row.guided_categories) {
+    guidedActiveCategoryId = row.active_category_id || null;
+    renderGuidedState();
+  }
+  if (row.text_markup_enabled && textMarkupActivePromptId !== (row.active_prompt_id || null)) {
+    textMarkupActivePromptId = row.active_prompt_id || null;
+    await renderTextMarkupState();
+  }
+}
+
 
 function showScreen(id) {
   ['loading-screen', 'invalid-session-screen', 'form-screen', 'quicktap-screen', 'guided-screen', 'textmarkup-screen', 'mediavote-screen', 'runningorder-screen'].forEach(s => {
@@ -482,8 +631,14 @@ async function init() {
     .eq('session_code', sessionCode)
     .maybeSingle();
 
-  if (sessionError || !session) {
+  if (sessionError) {
+    updateStudentConnection(false);
+    document.getElementById('student-submission-status').textContent = 'Could not load the session. Check your connection and retry.';
+    return;
+  }
+  if (!session) {
     showScreen('invalid-session-screen');
+    document.getElementById('student-connection-status').textContent = '';
     return;
   }
 
@@ -500,6 +655,10 @@ async function init() {
   } else {
     await initTextResponse(session);
   }
+  restoreTextDrafts();
+  updateStudentAvailability();
+  if (stopStudentSession) stopStudentSession();
+  stopStudentSession = watchSession(session.id, applyStudentSession, updateStudentConnection);
 }
 
 async function initTextResponse(session) {
@@ -517,7 +676,8 @@ async function initNonGuidedTextResponse(session) {
     .eq('session_id', session.id)
     .order('sort_order', { ascending: true });
 
-  if (catError || !categories || categories.length === 0) {
+  if (catError) { showStudentLoadError(); return; }
+  if (!categories || categories.length === 0) {
     showScreen('invalid-session-screen');
     return;
   }
@@ -541,8 +701,6 @@ async function initNonGuidedTextResponse(session) {
 // ---------------- Guided category mode ----------------
 let guidedCategories = [];
 let guidedActiveCategoryId = null;
-let guidedChannel = null;
-let guidedReconnectTimer = null;
 
 async function initGuidedTextResponse(session) {
   const { data: categories, error: catError } = await supabaseClient
@@ -551,7 +709,8 @@ async function initGuidedTextResponse(session) {
     .eq('session_id', session.id)
     .order('sort_order', { ascending: true });
 
-  if (catError || !categories || categories.length === 0) {
+  if (catError) { showStudentLoadError(); return; }
+  if (!categories || categories.length === 0) {
     showScreen('invalid-session-screen');
     return;
   }
@@ -563,7 +722,6 @@ async function initGuidedTextResponse(session) {
 
   renderGuidedState();
   showScreen('guided-screen');
-  setupGuidedSubscription();
 }
 
 function renderGuidedState() {
@@ -584,53 +742,6 @@ function renderGuidedState() {
   // in the textarea is left alone rather than discarded (see build prompt).
   const cat = guidedCategories.find(c => c.id === guidedActiveCategoryId);
   labelEl.textContent = cat ? cat.label : '';
-}
-
-function setupGuidedSubscription() {
-  teardownGuidedSubscription();
-
-  guidedChannel = supabaseClient
-    .channel(`session_${currentSession.id}`)
-    .on('postgres_changes', {
-      event: 'UPDATE',
-      schema: 'public',
-      table: 'sessions',
-      filter: `id=eq.${currentSession.id}`
-    }, (payload) => {
-      guidedActiveCategoryId = payload.new.active_category_id || null;
-      currentSession.active_category_id = guidedActiveCategoryId;
-      renderGuidedState();
-    })
-    .subscribe((status) => {
-      const banner = document.getElementById('guided-reconnect-banner');
-      if (status === 'SUBSCRIBED') {
-        banner.classList.add('hidden');
-      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-        banner.classList.remove('hidden');
-        scheduleGuidedReconnect();
-      }
-    });
-}
-
-function scheduleGuidedReconnect() {
-  if (guidedReconnectTimer) return;
-  guidedReconnectTimer = setTimeout(() => {
-    guidedReconnectTimer = null;
-    if (currentSession && currentSession.guided_categories && !document.getElementById('guided-screen').classList.contains('hidden')) {
-      setupGuidedSubscription();
-    }
-  }, 3000);
-}
-
-function teardownGuidedSubscription() {
-  if (guidedChannel) {
-    supabaseClient.removeChannel(guidedChannel);
-    guidedChannel = null;
-  }
-  if (guidedReconnectTimer) {
-    clearTimeout(guidedReconnectTimer);
-    guidedReconnectTimer = null;
-  }
 }
 
 let guidedSuccessTimer = null;
@@ -663,24 +774,27 @@ document.getElementById('guided-submit-btn').addEventListener('click', async () 
 
   // Always the live value from the realtime subscription, not whatever
   // was active when the page loaded or the student started typing.
-  const { error } = await supabaseClient
+  const { error } = await sendStudentRequest(() => supabaseClient
     .from('friction_pool')
     .insert({
-      session_id: currentSession.id,
+      session_id: currentSession.id, response_epoch: currentSession.response_epoch || 0,
       category_id: guidedActiveCategoryId,
       scenario
-    });
+    }));
 
   btn.disabled = false;
   btn.textContent = 'Submit';
 
   if (error) {
-    errorBanner.textContent = 'Could not submit — check your connection and try again.';
+    errorBanner.textContent = submissionErrorMessage(error);
     errorBanner.classList.remove('hidden');
     return;
   }
 
-  scenarioEl.value = '';
+  if (scenarioEl.value.trim() === scenario) {
+    scenarioEl.value = '';
+    clearDraft(scenarioEl.id);
+  }
   successBanner.classList.remove('hidden');
   if (guidedSuccessTimer) clearTimeout(guidedSuccessTimer);
   guidedSuccessTimer = setTimeout(() => {
@@ -691,8 +805,6 @@ document.getElementById('guided-submit-btn').addEventListener('click', async () 
 // ---------------- Text markup mode ----------------
 let textMarkupPrompts = [];
 let textMarkupActivePromptId = null;
-let textMarkupChannel = null;
-let textMarkupReconnectTimer = null;
 let currentRanges = [];
 let totalWordCount = 0;
 let textMarkupSuccessTimer = null;
@@ -705,7 +817,8 @@ async function initTextMarkup(session) {
     .eq('session_id', session.id)
     .order('sort_order', { ascending: true });
 
-  if (promptError || !prompts || prompts.length === 0) {
+  if (promptError) { showStudentLoadError(); return; }
+  if (!prompts || prompts.length === 0) {
     showScreen('invalid-session-screen');
     return;
   }
@@ -724,7 +837,6 @@ async function initTextMarkup(session) {
 
   await renderTextMarkupState();
   showScreen('textmarkup-screen');
-  setupTextMarkupSubscription();
 }
 
 // ---------------------------------------------------------------------
@@ -815,6 +927,8 @@ function buildPassageMarkup(renderedParagraphs) {
 }
 
 async function renderTextMarkupState() {
+  const promptId = textMarkupActivePromptId;
+  const isCurrent = beginViewRequest('markup-restore', () => `${currentSession.id}:${currentSession.response_epoch}:${textMarkupActivePromptId}`);
   const waitingEl = document.getElementById('textmarkup-waiting-status');
   const formEl = document.getElementById('textmarkup-active-form');
   const labelEl = document.getElementById('textmarkup-prompt-label');
@@ -840,6 +954,13 @@ async function renderTextMarkupState() {
   currentRanges = [];
   renderHighlights();
 
+  const saved = readDraft(`markup_${promptId}`);
+  if (saved && Array.isArray(saved.spans)) {
+    currentRanges = saved.spans;
+    renderHighlights();
+    return;
+  }
+  const editVersion = markupEditVersion;
   // Restore the student's own prior submission for this prompt, if any.
   // Goes through a scoped RPC rather than a direct table select — the
   // anon SELECT policy on text_markup_responses only allows reads once
@@ -851,6 +972,7 @@ async function renderTextMarkupState() {
     p_device_id: deviceId
   });
 
+  if (!isCurrent() || markupEditVersion !== editVersion) return;
   if (existing && existing.length > 0 && existing[0].spans) {
     currentRanges = existing[0].spans;
     renderHighlights();
@@ -879,6 +1001,11 @@ function getIntersectingWordRange(passageEl) {
   return { start, end };
 }
 
+let markupEditVersion = 0;
+function saveMarkupDraft() {
+  ++markupEditVersion;
+  if (textMarkupActivePromptId) writeDraft(`markup_${textMarkupActivePromptId}`, { spans: currentRanges });
+}
 function renderHighlights() {
   const passageEl = document.getElementById('textmarkup-passage');
   const wordEls = passageEl.querySelectorAll('.tm-word');
@@ -919,6 +1046,7 @@ function commitCurrentSelection() {
   }
 
   window.getSelection().removeAllRanges();
+  saveMarkupDraft();
   renderHighlights();
 }
 
@@ -968,6 +1096,7 @@ function getWordElFromEventTarget(target) {
 function removeSpanAtWordIndex(idx) {
   const before = currentRanges.length;
   currentRanges = currentRanges.filter(r => !(idx >= r.start && idx <= r.end));
+  if (currentRanges.length !== before) saveMarkupDraft();
   return currentRanges.length !== before;
 }
 
@@ -1019,59 +1148,10 @@ document.getElementById('textmarkup-passage').addEventListener('touchend', handl
 
 document.getElementById('textmarkup-clear-btn').addEventListener('click', () => {
   currentRanges = [];
+  saveMarkupDraft();
   renderHighlights();
   document.getElementById('textmarkup-warning-banner').classList.add('hidden');
 });
-
-function setupTextMarkupSubscription() {
-  teardownTextMarkupSubscription();
-
-  textMarkupChannel = supabaseClient
-    .channel(`text_markup_session_${currentSession.id}`)
-    .on('postgres_changes', {
-      event: 'UPDATE',
-      schema: 'public',
-      table: 'sessions',
-      filter: `id=eq.${currentSession.id}`
-    }, async (payload) => {
-      const newPromptId = payload.new.active_prompt_id || null;
-      if (newPromptId !== textMarkupActivePromptId) {
-        textMarkupActivePromptId = newPromptId;
-        currentSession.active_prompt_id = textMarkupActivePromptId;
-        await renderTextMarkupState();
-      }
-    })
-    .subscribe((status) => {
-      const banner = document.getElementById('textmarkup-reconnect-banner');
-      if (status === 'SUBSCRIBED') {
-        banner.classList.add('hidden');
-      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-        banner.classList.remove('hidden');
-        scheduleTextMarkupReconnect();
-      }
-    });
-}
-
-function scheduleTextMarkupReconnect() {
-  if (textMarkupReconnectTimer) return;
-  textMarkupReconnectTimer = setTimeout(() => {
-    textMarkupReconnectTimer = null;
-    if (currentSession && currentSession.text_markup_enabled && !document.getElementById('textmarkup-screen').classList.contains('hidden')) {
-      setupTextMarkupSubscription();
-    }
-  }, 3000);
-}
-
-function teardownTextMarkupSubscription() {
-  if (textMarkupChannel) {
-    supabaseClient.removeChannel(textMarkupChannel);
-    textMarkupChannel = null;
-  }
-  if (textMarkupReconnectTimer) {
-    clearTimeout(textMarkupReconnectTimer);
-    textMarkupReconnectTimer = null;
-  }
-}
 
 document.getElementById('textmarkup-submit-btn').addEventListener('click', async () => {
   const errorBanner = document.getElementById('textmarkup-error-banner');
@@ -1094,6 +1174,7 @@ document.getElementById('textmarkup-submit-btn').addEventListener('click', async
 
   if (textMarkupSubmitting) return;
   textMarkupSubmitting = true;
+  const submissionIsCurrent = beginViewRequest('markup-submit', () => `${currentSession.id}:${currentSession.response_epoch}:${textMarkupActivePromptId}`);
 
   const btn = document.getElementById('textmarkup-submit-btn');
   btn.disabled = true;
@@ -1105,19 +1186,20 @@ document.getElementById('textmarkup-submit-btn').addEventListener('click', async
   // exists yet), and the only anon SELECT policy on this table is gated by
   // results_revealed. A direct upsert 401s (42501) on every submit before
   // reveal. Same pattern as get_own_text_markup_response above.
-  const { error } = await supabaseClient.rpc('submit_text_markup_response', {
-    p_session_id: currentSession.id,
+  const { error } = await sendStudentRequest(() => supabaseClient.rpc('submit_text_markup_response', {
+    p_session_id: currentSession.id, p_response_epoch: currentSession.response_epoch || 0,
     p_prompt_id: textMarkupActivePromptId,
     p_device_id: deviceId,
     p_spans: currentRanges
-  });
+  }));
 
   btn.disabled = false;
   btn.textContent = 'Submit';
   textMarkupSubmitting = false;
+  if (!submissionIsCurrent()) return;
 
   if (error) {
-    errorBanner.textContent = 'Could not submit — check your connection and try again.';
+    errorBanner.textContent = submissionErrorMessage(error);
     errorBanner.classList.remove('hidden');
     return;
   }
@@ -1136,7 +1218,8 @@ async function initQuickTap(session) {
     .eq('session_id', session.id)
     .order('sort_order', { ascending: true });
 
-  if (optError || !options || options.length === 0) {
+  if (optError) { showStudentLoadError(); return; }
+  if (!options || options.length === 0) {
     showScreen('invalid-session-screen');
     return;
   }
@@ -1151,8 +1234,8 @@ async function initQuickTap(session) {
     headingEl.classList.add('hidden');
   }
 
-  const votedKey = 'voted_' + session.session_code;
-  const alreadyVoted = session.one_vote_per_device && !!localStorage.getItem(votedKey);
+  const votedKey = draftKey('vote');
+  const alreadyVoted = session.one_vote_per_device && !!safeStorage.getItem(votedKey);
 
   if (alreadyVoted) {
     document.getElementById('tap-grid').classList.add('hidden');
@@ -1212,24 +1295,27 @@ document.getElementById('submit-btn').addEventListener('click', async () => {
   btn.disabled = true;
   btn.textContent = 'Submitting…';
 
-  const { error } = await supabaseClient
+  const { error } = await sendStudentRequest(() => supabaseClient
     .from('friction_pool')
     .insert({
-      session_id: currentSession.id,
+      session_id: currentSession.id, response_epoch: currentSession.response_epoch || 0,
       category_id: categoryId,
       scenario
-    });
+    }));
 
   btn.disabled = false;
   btn.textContent = 'Submit';
 
   if (error) {
-    errorBanner.textContent = 'Could not submit — check your connection and try again.';
+    errorBanner.textContent = submissionErrorMessage(error);
     errorBanner.classList.remove('hidden');
     return;
   }
 
-  scenarioEl.value = '';
+  if (scenarioEl.value.trim() === scenario) {
+    scenarioEl.value = '';
+    clearDraft(scenarioEl.id);
+  }
   successBanner.classList.remove('hidden');
   if (successTimer) clearTimeout(successTimer);
   successTimer = setTimeout(() => {
@@ -1247,19 +1333,19 @@ async function handleTap(optionId) {
   const allBtns = document.querySelectorAll('.tap-btn, .tap-btn-compact');
   allBtns.forEach(b => b.disabled = true);
 
-  const { error } = await supabaseClient
+  const { error } = await sendStudentRequest(() => supabaseClient
     .from('quick_tap_responses')
-    .insert({ session_id: currentSession.id, option_id: optionId, device_id: deviceId });
+    .insert({ session_id: currentSession.id, response_epoch: currentSession.response_epoch || 0, option_id: optionId, device_id: deviceId }));
 
   if (error) {
     allBtns.forEach(b => b.disabled = false);
-    errorBanner.textContent = 'Could not submit — check your connection and try again.';
+    errorBanner.textContent = submissionErrorMessage(error);
     errorBanner.classList.remove('hidden');
     return;
   }
 
   if (currentSession.one_vote_per_device) {
-    localStorage.setItem('voted_' + currentSession.session_code, optionId);
+    safeStorage.setItem(draftKey('vote'), optionId);
     document.getElementById('tap-grid').classList.add('hidden');
     document.getElementById('voted-status').classList.remove('hidden');
   } else {
@@ -1287,7 +1373,8 @@ async function initMediaVote(session) {
     .eq('session_id', session.id)
     .order('sort_order', { ascending: true });
 
-  if (optError || !options || options.length === 0) {
+  if (optError) { showStudentLoadError(); return; }
+  if (!options || options.length === 0) {
     showScreen('invalid-session-screen');
     return;
   }
@@ -1319,12 +1406,12 @@ async function handleMediaVoteTap(optionId) {
   const successBanner = document.getElementById('mediavote-success-banner');
   errorBanner.classList.add('hidden');
 
-  const { error } = await supabaseClient
+  const { error } = await sendStudentRequest(() => supabaseClient
     .from('media_vote_responses')
-    .insert({ session_id: currentSession.id, option_id: optionId, device_id: deviceId });
+    .insert({ session_id: currentSession.id, response_epoch: currentSession.response_epoch || 0, option_id: optionId, device_id: deviceId }));
 
   if (error) {
-    errorBanner.textContent = 'Could not submit — check your connection and try again.';
+    errorBanner.textContent = submissionErrorMessage(error);
     errorBanner.classList.remove('hidden');
     return;
   }
@@ -1351,21 +1438,24 @@ async function initRunningOrder(session) {
     .order('sort_order', { ascending: true });
 
   if (itemsError) {
-    showScreen('invalid-session-screen');
+    showStudentLoadError();
     return;
   }
   rankingOrder = items || [];
+  const savedOrder = readDraft('ranking');
+  if (savedOrder && Array.isArray(savedOrder.ids)) {
+    const byId = new Map(rankingOrder.map(item => [item.id, item]));
+    const restored = [...new Set(savedOrder.ids)].filter(id => byId.has(id));
+    rankingOrder = restored.map(id => byId.get(id)).concat(rankingOrder.filter(item => !restored.includes(item.id)));
+  }
 
-  // Tab-refresh case: resume an existing claim by device_id rather than
-  // asking to re-enter a team name. A refresh before submit still loses
-  // the in-progress local order — deliberately, per the build's scope —
-  // so this always resumes from the original unordered state, not
-  // whatever position the team had reached.
-  const { data: existingTeams } = await supabaseClient.rpc('get_own_ranking_team', {
+  // Resume the claim and reconcile the local draft with the current item roster.
+  const { data: existingTeams, error: teamReadError } = await supabaseClient.rpc('get_own_ranking_team', {
     p_session_id: session.id,
     p_device_id: deviceId
   });
 
+  if (teamReadError) { showStudentLoadError(); return; }
   showScreen('runningorder-screen');
 
   const existingTeam = existingTeams && existingTeams.length > 0 ? existingTeams[0] : null;
@@ -1377,11 +1467,13 @@ async function initRunningOrder(session) {
     showRunningOrderSuperseded();
   } else if (existingTeam) {
     rankingTeamId = existingTeam.id;
-    showRunningOrderRankingForm();
-  } else if (session.results_revealed) {
-    // No claim yet and results are already in — don't let someone spend
-    // time naming a team and reordering items just to hit a wall at submit.
-    showRunningOrderClosed();
+    const { data: submitted, error: submissionReadError } = await supabaseClient.rpc('get_own_ranking_submission', { p_session_id: session.id, p_device_id: deviceId });
+    if (submissionReadError) { showStudentLoadError(); return; }
+    if (submitted && submitted.some(row => row.team_id === rankingTeamId)) {
+      rankingSubmitted = true;
+      document.getElementById('runningorder-join-form').classList.add('hidden');
+      document.getElementById('runningorder-submitted-status').classList.remove('hidden');
+    } else showRunningOrderRankingForm();
   } else {
     document.getElementById('runningorder-join-form').classList.remove('hidden');
     document.getElementById('runningorder-ranking-form').classList.add('hidden');
@@ -1403,11 +1495,11 @@ document.getElementById('runningorder-claim-btn').addEventListener('click', asyn
   const btn = document.getElementById('runningorder-claim-btn');
   btn.disabled = true;
 
-  const { data, error } = await supabaseClient.rpc('claim_ranking_team', {
-    p_session_id: currentSession.id,
+  const { data, error } = await sendStudentRequest(() => supabaseClient.rpc('claim_ranking_team', {
+    p_session_id: currentSession.id, p_response_epoch: currentSession.response_epoch || 0,
     p_team_name: teamName,
     p_device_id: deviceId
-  });
+  }).single());
 
   btn.disabled = false;
 
@@ -1464,6 +1556,7 @@ function renderRankingOrder() {
 
 function moveRankingItem(index, direction) {
   const otherIndex = index + direction;
+  if (rankingSubmitted || currentSession.submissions_open === false) return;
   if (otherIndex < 0 || otherIndex >= rankingOrder.length) return;
 
   const movedItem = rankingOrder[index];
@@ -1471,6 +1564,7 @@ function moveRankingItem(index, direction) {
 
   rankingOrder[index] = swappedItem;
   rankingOrder[otherIndex] = movedItem;
+  writeDraft('ranking', { ids: rankingOrder.map(item => item.id) });
   renderRankingOrder();
 
   // Fire-and-forget — the button press already updated local state above,
@@ -1478,7 +1572,7 @@ function moveRankingItem(index, direction) {
   // only affects the tutor-facing oscillation diagnostic, not the team's
   // ranking, so any error here (other than TEAM_SUPERSEDED) is just logged.
   supabaseClient.rpc('record_ranking_move', {
-    p_session_id: currentSession.id,
+    p_session_id: currentSession.id, p_response_epoch: currentSession.response_epoch || 0,
     p_team_id: rankingTeamId,
     p_device_id: deviceId,
     p_moved_item_id: movedItem.id,
@@ -1521,12 +1615,14 @@ async function refreshRankingItemsAfterDesync() {
     .select('*')
     .eq('session_id', currentSession.id)
     .order('sort_order', { ascending: true });
-  const freshItems = items || [];
+  if (!items) return; // a failed refresh must not discard the local draft
+  const freshItems = items;
   const freshById = new Map(freshItems.map(i => [i.id, i]));
   const kept = rankingOrder.filter(i => freshById.has(i.id));
   const keptIds = new Set(kept.map(i => i.id));
   const added = freshItems.filter(i => !keptIds.has(i.id));
   rankingOrder = kept.concat(added);
+  writeDraft('ranking', { ids: rankingOrder.map(item => item.id) });
   renderRankingOrder();
 }
 
@@ -1539,12 +1635,12 @@ document.getElementById('runningorder-submit-btn').addEventListener('click', asy
   btn.disabled = true;
   btn.textContent = 'Submitting…';
 
-  const { error } = await supabaseClient.rpc('submit_ranking_order', {
-    p_session_id: currentSession.id,
+  const { error } = await sendStudentRequest(() => supabaseClient.rpc('submit_ranking_order', {
+    p_session_id: currentSession.id, p_response_epoch: currentSession.response_epoch || 0,
     p_team_id: rankingTeamId,
     p_device_id: deviceId,
     p_final_order: rankingOrder.map(item => item.id)
-  });
+  }));
 
   btn.disabled = false;
   btn.textContent = 'Submit final order';
@@ -1564,12 +1660,13 @@ document.getElementById('runningorder-submit-btn').addEventListener('click', asy
       errorBanner.classList.remove('hidden');
       return;
     }
-    errorBanner.textContent = 'Could not submit — check your connection and try again.';
+    errorBanner.textContent = submissionErrorMessage(error);
     errorBanner.classList.remove('hidden');
     return;
   }
 
   rankingSubmitted = true;
+  clearDraft('ranking');
   document.getElementById('runningorder-ranking-form').classList.add('hidden');
   document.getElementById('runningorder-submitted-status').classList.remove('hidden');
 });

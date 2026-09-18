@@ -169,6 +169,8 @@
     font-weight: 600;
   }
   .session-row-actions { display: flex; align-items: center; gap: 8px; }
+  #session-view-screen > .top-row { flex-wrap: wrap; gap: 12px; }
+  #session-view-screen > .top-row .session-row-actions { flex-wrap: wrap; }
   .session-row-actions button { font-size: 13px; padding: 8px 12px; white-space: nowrap; }
   .session-list-controls { margin-bottom: 16px; }
   .pulse-check-panel h2 { margin-bottom: 2px; }
@@ -665,6 +667,9 @@
         <div class="session-row-actions">
           <button class="ghost" type="button" id="open-display-btn">Open display ↗</button>
           <button class="ghost" type="button" id="refresh-session-btn">⟳ Refresh</button>
+          <button class="ghost" type="button" id="collection-toggle-btn">Close submissions</button>
+          <button class="ghost" type="button" id="duplicate-session-btn">Duplicate session</button>
+          <button class="ghost" type="button" id="export-session-btn">Export CSV</button>
           <button class="warning" type="button" id="reset-session-btn">Reset responses</button>
           <button class="danger" type="button" id="delete-session-btn">Delete permanently</button>
         </div>
@@ -815,6 +820,17 @@
   </div>
 </div>
 
+<dialog id="duplicate-session-dialog" style="background:#1f2128;color:#f2f2f5;border:1px solid #34384a;border-radius:12px;max-width:440px;width:90%">
+  <form id="duplicate-session-form">
+    <h2>Duplicate session</h2>
+    <p>Copy the activity settings with fresh responses.</p>
+    <label for="duplicate-name">Session name</label><input id="duplicate-name" required>
+    <label for="duplicate-code">New session code</label><input id="duplicate-code" required pattern="[A-Za-z0-9_-]+">
+    <p id="duplicate-error" role="alert"></p>
+    <button type="button" id="duplicate-cancel" class="ghost">Cancel</button>
+    <button type="submit" id="duplicate-save">Create copy</button>
+  </form>
+</dialog>
 <script>
 // ======================================================================
 // CONFIG — fill in before deploying. anon/public key only — NEVER the
@@ -826,6 +842,59 @@ const SUPABASE_ANON_KEY = 'sb_publishable_dg2m3ukxrohfX-IWL1IPMw_iJvd7wn3';
 // ======================================================================
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ---------------- Async lifecycle (kept inline for standalone deployment) ----------------
+const viewRequests = new Map();
+let viewRequestSequence = 0;
+function beginViewRequest(key, scope = () => currentSession && currentSession.id) {
+  const token = ++viewRequestSequence;
+  viewRequests.set(key, token);
+  const initialScope = scope();
+  return () => viewRequests.get(key) === token && scope() === initialScope;
+}
+function cancelViewRequests() { viewRequests.clear(); }
+function releaseSubscription(channel, timer) {
+  if (timer) clearTimeout(timer);
+  if (channel) supabaseClient.removeChannel(channel);
+}
+// One lifecycle for session controls: subscribe, refresh after reconnect,
+// retry after interruption, and dispose without restarting a closed view.
+function watchSession(sessionId, onRow, onStatus = () => {}) {
+  let channel = null, timer = null, stopped = false, refreshSequence = 0;
+  async function refresh() {
+    const sequence = ++refreshSequence;
+    const { data, error } = await supabaseClient.from('sessions').select('*').eq('id', sessionId).maybeSingle();
+    if (stopped || sequence !== refreshSequence) return;
+    if (error) { onStatus(false); return; }
+    if (data) { onStatus(true); await onRow(data, true); }
+  }
+  function connect() {
+    if (stopped) return;
+    const previous = channel;
+    channel = null;
+    if (previous) supabaseClient.removeChannel(previous);
+    const next = supabaseClient.channel(`controls_${sessionId}_${Math.random().toString(36).slice(2)}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${sessionId}` }, async payload => {
+        if (stopped || channel !== next) return;
+        ++refreshSequence; // a stale refresh must not undo a newer realtime row
+        await onRow(payload.new);
+      });
+    channel = next;
+    next.subscribe(status => {
+      if (stopped || channel !== next) return;
+      if (status === 'SUBSCRIBED') { if (timer) clearTimeout(timer); timer = null; refresh(); }
+      else if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) {
+        onStatus(false);
+        if (!timer) timer = setTimeout(() => { timer = null; connect(); }, 3000);
+      }
+    });
+  }
+  const online = () => refresh();
+  window.addEventListener('online', online);
+  connect();
+  return () => { stopped = true; ++refreshSequence; window.removeEventListener('online', online); releaseSubscription(channel, timer); };
+}
+
 
 const CATEGORY_PALETTE = [
   '#5b8cff', '#ff8a5b', '#48c78e', '#e05bff',
@@ -887,6 +956,8 @@ function showAuthed() {
   screens.app.classList.remove('hidden');
 }
 function showLogin() {
+  teardownSessionView();
+  currentSession = null;
   screens.loginScreen.classList.remove('hidden');
   screens.app.classList.add('hidden');
 }
@@ -894,13 +965,8 @@ function showListScreen() {
   screens.sessionList.classList.remove('hidden');
   screens.newSession.classList.add('hidden');
   screens.sessionView.classList.add('hidden');
-  teardownFeedSubscription();
-  teardownTallySubscription();
-  teardownTextMarkupSubscription();
-  teardownMediaVoteSubscription();
-  teardownMediaSessionRowSubscription();
-  teardownRunningOrderSubscription();
-  stopMediaVotePositionTicker();
+  teardownSessionView();
+  currentSession = null;
   document.getElementById('connection-banner').classList.add('hidden');
   guidedCategories = [];
   activeCategoryId = null;
@@ -926,6 +992,126 @@ function showSessionViewScreen(session) {
   screens.sessionView.classList.remove('hidden');
   enterSession(session);
 }
+
+
+// ---------------- Session workflow controls ----------------
+let stopAdminSession = null;
+function teardownSessionView() {
+  cancelViewRequests();
+  if (stopAdminSession) stopAdminSession();
+  stopAdminSession = null;
+  teardownFeedSubscription();
+  teardownTallySubscription();
+  teardownTextMarkupSubscription();
+  teardownMediaVoteSubscription();
+  teardownMediaSessionRowSubscription();
+  teardownRunningOrderSubscription();
+  stopMediaVotePositionTicker();
+}
+function renderCollectionControl() {
+  const open = currentSession && currentSession.submissions_open !== false;
+  const button = document.getElementById('collection-toggle-btn');
+  button.textContent = open ? 'Close submissions' : 'Open submissions';
+  button.setAttribute('aria-pressed', String(!open));
+}
+document.getElementById('collection-toggle-btn').addEventListener('click', async event => {
+  if (!currentSession) return;
+  const sessionId = currentSession.id;
+  const open = currentSession.submissions_open === false;
+  const button = event.currentTarget;
+  button.disabled = true;
+  const { error } = await supabaseClient.from('sessions').update({ submissions_open: open }).eq('id', sessionId);
+  button.disabled = false;
+  if (error) { showError('Could not change collection state: ' + error.message); return; }
+  if (currentSession && currentSession.id === sessionId) { currentSession.submissions_open = open; renderCollectionControl(); }
+});
+let duplicateSourceId = null;
+const duplicateDialog = document.getElementById('duplicate-session-dialog');
+document.getElementById('duplicate-session-btn').addEventListener('click', () => {
+  duplicateSourceId = currentSession.id;
+  document.getElementById('duplicate-name').value = currentSession.name + ' (copy)';
+  document.getElementById('duplicate-code').value = currentSession.session_code + '-' + generatePulseSessionCode();
+  document.getElementById('duplicate-error').textContent = '';
+  duplicateDialog.showModal();
+});
+document.getElementById('duplicate-cancel').addEventListener('click', () => duplicateDialog.close());
+document.getElementById('duplicate-session-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = document.getElementById('duplicate-save');
+  button.disabled = true;
+  const { data, error } = await supabaseClient.rpc('duplicate_classroom_session', {
+    p_session_id: duplicateSourceId,
+    p_name: document.getElementById('duplicate-name').value.trim(),
+    p_code: document.getElementById('duplicate-code').value.trim()
+  }).single();
+  button.disabled = false;
+  if (error) { document.getElementById('duplicate-error').textContent = error.code === '23505' ? 'That code is already in use.' : error.message; return; }
+  duplicateDialog.close();
+  showSessionViewScreen(data);
+});
+// Paginate exports so classroom histories are not silently capped by API row limits.
+async function fetchAllSessionRows(table, sessionId) {
+  const rows = [];
+  for (let offset = 0; ; offset += 500) {
+    const { data, error } = await supabaseClient.from(table).select('*').eq('session_id', sessionId).order('id').range(offset, offset + 499);
+    if (error) throw error;
+    rows.push(...data);
+    if (data.length < 500) return rows;
+  }
+}
+function csvCell(value) {
+  let text = value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+  // Prevent student-authored text being interpreted as a spreadsheet formula.
+  if (/^[\s]*[=+@-]/.test(text) || /^[\t\r\n]/.test(text)) text = "'" + text;
+  return '"' + text.replace(/"/g, '""') + '"';
+}
+function makeResultsCsv(session, tables) {
+  const columns = ['session_code', 'session_name', 'record_type', 'id', 'created_at', 'status', 'category', 'scenario', 'option', 'prompt', 'passage_text', 'passage_locale', 'spans', 'team', 'final_order', 'moved_item', 'swapped_with_item', 'action', 'position_ms'];
+  const categories = new Map((tables.session_categories || []).map(r => [r.id, r.label]));
+  const options = new Map((tables.quick_tap_options || []).map(r => [r.id, r.label]));
+  const prompts = new Map((tables.text_markup_prompts || []).map(r => [r.id, r.prompt_text]));
+  const items = new Map((tables.ranking_items || []).map(r => [r.id, r.label]));
+  const teams = new Map((tables.ranking_teams || []).map(r => [r.id, r]));
+  const rows = [columns.map(csvCell).join(',')];
+  for (const table of ['friction_pool','quick_tap_responses','text_markup_responses','media_vote_responses','media_transport_events','ranking_submissions','ranking_moves']) {
+    for (const row of tables[table] || []) {
+      const team = teams.get(row.team_id);
+      const record = {
+        session_code: session.session_code, session_name: session.name, record_type: table,
+        id: row.id, created_at: row.created_at || row.updated_at || row.submitted_at,
+        status: team ? (team.superseded ? 'superseded' : 'current') : row.status,
+        category: categories.get(row.category_id), scenario: row.scenario, option: options.get(row.option_id),
+        prompt: prompts.get(row.prompt_id), passage_text: table === 'text_markup_responses' ? session.passage_text : null,
+        passage_locale: table === 'text_markup_responses' ? session.passage_locale : null, spans: row.spans, team: team && team.team_name,
+        final_order: row.final_order && row.final_order.map(id => items.get(id) || id),
+        moved_item: items.get(row.moved_item_id), swapped_with_item: items.get(row.swapped_with_item_id),
+        action: row.action, position_ms: row.position_ms
+      };
+      rows.push(columns.map(column => csvCell(record[column])).join(','));
+    }
+  }
+  return '\uFEFF' + rows.join('\r\n');
+}
+document.getElementById('export-session-btn').addEventListener('click', async event => {
+  const session = { ...currentSession };
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = 'Exporting…';
+  try {
+    const names = session.running_order_enabled ? ['ranking_items','ranking_teams','ranking_submissions','ranking_moves']
+      : session.text_markup_enabled ? ['text_markup_prompts','text_markup_responses']
+      : session.media_vote_enabled ? ['quick_tap_options','media_vote_responses','media_transport_events']
+      : session.quick_tap_enabled ? ['quick_tap_options','quick_tap_responses'] : ['session_categories','friction_pool'];
+    const entries = await Promise.all(names.map(async name => [name, await fetchAllSessionRows(name, session.id)]));
+    const csv = makeResultsCsv(session, Object.fromEntries(entries));
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+    const link = document.createElement('a');
+    link.href = url; link.download = session.session_code + '-results.csv';
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { showError('Could not export results: ' + error.message); }
+  finally { button.disabled = false; button.textContent = 'Export CSV'; }
+});
 
 // ---------------- Auth ----------------
 document.getElementById('send-link-btn').addEventListener('click', async () => {
@@ -1138,18 +1324,17 @@ async function launchPulseCheck(style, btn) {
   // retry silently rather than surfacing an error for something the tutor
   // never typed and can't fix.
   for (let attempt = 0; attempt < 5 && !session; attempt++) {
-    const { data, error } = await supabaseClient
-      .from('sessions')
-      .insert({
+    const { data, error } = await supabaseClient.rpc('create_classroom_session', {
+      p_config: {
         name: `${preset.namePrefix} – ${formatTimeForPulseName()}`,
         session_code: generatePulseSessionCode(),
         quick_tap_enabled: true,
         quick_tap_style: style,
         one_vote_per_device: preset.oneVotePerDevice,
         quick_tap_heading: preset.heading
-      })
-      .select()
-      .single();
+      },
+      p_options: preset.options
+    }).single();
 
     if (!error) {
       session = data;
@@ -1168,22 +1353,7 @@ async function launchPulseCheck(style, btn) {
     return;
   }
 
-  const optionRows = preset.options.map((opt, idx) => ({
-    session_id: session.id,
-    label: opt.label,
-    color: opt.color,
-    sort_order: idx
-  }));
-
-  const { error: optError } = await supabaseClient
-    .from('quick_tap_options')
-    .insert(optionRows);
-
   if (btn) btn.disabled = false;
-
-  if (optError) {
-    showError('Session created, but options failed to save: ' + optError.message);
-  }
 
   showSessionViewScreen(session);
 }
@@ -1588,9 +1758,8 @@ document.getElementById('create-session-btn').addEventListener('click', async ()
     ? (textmarkupLocaleOther || 'en')
     : textmarkupLocaleSelect;
 
-  const { data: session, error: sessionError } = await supabaseClient
-    .from('sessions')
-    .insert({
+  const { data: session, error: sessionError } = await supabaseClient.rpc('create_classroom_session', {
+    p_config: {
       name,
       session_code: code,
       quick_tap_enabled: newSessionMode === 'quicktap',
@@ -1604,9 +1773,12 @@ document.getElementById('create-session-btn').addEventListener('click', async ()
       media_source_type: newSessionMode === 'mediavote' ? newMediaVoteSourceType : null,
       media_entry_id: (newSessionMode === 'mediavote' && newMediaVoteSourceType === 'mmutube') ? mediaEntryId : null,
       running_order_enabled: newSessionMode === 'runningorder'
-    })
-    .select()
-    .single();
+    },
+    p_categories: newSessionMode === 'text' ? newCategories : [],
+    p_options: ['quicktap', 'mediavote'].includes(newSessionMode) ? newQuickTapOptions : [],
+    p_prompts: newSessionMode === 'textmarkup' ? newTextMarkupPrompts : []
+  }).single();
+  btn.disabled = false;
 
   if (sessionError) {
     btn.disabled = false;
@@ -1617,64 +1789,6 @@ document.getElementById('create-session-btn').addEventListener('click', async ()
       showError(sessionError.message);
     }
     return;
-  }
-
-  if (newSessionMode === 'text') {
-    const categoryRows = newCategories.map((label, idx) => ({
-      session_id: session.id,
-      label,
-      sort_order: idx
-    }));
-
-    const { error: catError } = await supabaseClient
-      .from('session_categories')
-      .insert(categoryRows);
-
-    btn.disabled = false;
-
-    if (catError) {
-      showError('Session created, but categories failed to save: ' + catError.message);
-      return;
-    }
-  } else if (newSessionMode === 'textmarkup') {
-    const promptRows = newTextMarkupPrompts.map((text, idx) => ({
-      session_id: session.id,
-      prompt_text: text,
-      sort_order: idx
-    }));
-
-    const { error: promptError } = await supabaseClient
-      .from('text_markup_prompts')
-      .insert(promptRows);
-
-    btn.disabled = false;
-
-    if (promptError) {
-      showError('Session created, but prompts failed to save: ' + promptError.message);
-      return;
-    }
-  } else if (newSessionMode === 'runningorder') {
-    // No creation-time insert — story items are authored one at a time in
-    // the live session view, not accumulated in this form.
-    btn.disabled = false;
-  } else {
-    const optionRows = newQuickTapOptions.map((opt, idx) => ({
-      session_id: session.id,
-      label: opt.label,
-      color: opt.color,
-      sort_order: idx
-    }));
-
-    const { error: optError } = await supabaseClient
-      .from('quick_tap_options')
-      .insert(optionRows);
-
-    btn.disabled = false;
-
-    if (optError) {
-      showError('Session created, but quick-tap options failed to save: ' + optError.message);
-      return;
-    }
   }
 
   showSessionViewScreen(session);
@@ -1811,11 +1925,13 @@ document.addEventListener('keydown', (e) => {
 
 // ---------------- Guided category mode ----------------
 async function loadGuidedCategories() {
+  const requestIsCurrent = beginViewRequest('loadGuidedCategories', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, activeCategoryId]));
   const { data, error } = await supabaseClient
     .from('session_categories')
     .select('*')
     .eq('session_id', currentSession.id)
     .order('sort_order', { ascending: true });
+  if (!requestIsCurrent()) return;
 
   if (error) {
     handleQueryError(error);
@@ -2205,11 +2321,13 @@ async function cycleTextMarkupChartType() {
 }
 
 async function loadTextMarkupPrompts() {
+  const requestIsCurrent = beginViewRequest('loadTextMarkupPrompts', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, activePromptId]));
   const { data, error } = await supabaseClient
     .from('text_markup_prompts')
     .select('*')
     .eq('session_id', currentSession.id)
     .order('sort_order', { ascending: true });
+  if (!requestIsCurrent()) return;
 
   if (error) {
     handleQueryError(error);
@@ -2314,6 +2432,7 @@ async function setActivePrompt(promptId) {
 }
 
 async function loadTextMarkupAggregate() {
+  const requestIsCurrent = beginViewRequest('loadTextMarkupAggregate', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, activePromptId]));
   if (!activePromptId) {
     textMarkupResponses = [];
     updateTextMarkupTotalCount();
@@ -2327,6 +2446,7 @@ async function loadTextMarkupAggregate() {
     .select('spans')
     .eq('session_id', currentSession.id)
     .eq('prompt_id', activePromptId);
+  if (!requestIsCurrent()) return;
 
   textMarkupResponses = error ? [] : (data || []);
   updateTextMarkupTotalCount();
@@ -2388,14 +2508,10 @@ function scheduleTextMarkupReconnect() {
 }
 
 function teardownTextMarkupSubscription() {
-  if (textMarkupChannel) {
-    supabaseClient.removeChannel(textMarkupChannel);
-    textMarkupChannel = null;
-  }
-  if (textMarkupReconnectTimer) {
-    clearTimeout(textMarkupReconnectTimer);
-    textMarkupReconnectTimer = null;
-  }
+  const channel = textMarkupChannel, timer = textMarkupReconnectTimer;
+  textMarkupChannel = null;
+  textMarkupReconnectTimer = null;
+  releaseSubscription(channel, timer);
 }
 
 // ---------------- Media Vote mode ----------------
@@ -2497,14 +2613,10 @@ function scheduleMediaSessionRowReconnect() {
 }
 
 function teardownMediaSessionRowSubscription() {
-  if (mediaSessionRowChannel) {
-    supabaseClient.removeChannel(mediaSessionRowChannel);
-    mediaSessionRowChannel = null;
-  }
-  if (mediaSessionRowReconnectTimer) {
-    clearTimeout(mediaSessionRowReconnectTimer);
-    mediaSessionRowReconnectTimer = null;
-  }
+  const channel = mediaSessionRowChannel, timer = mediaSessionRowReconnectTimer;
+  mediaSessionRowChannel = null;
+  mediaSessionRowReconnectTimer = null;
+  releaseSubscription(channel, timer);
 }
 
 function parseMmSsToMs(str) {
@@ -2716,11 +2828,13 @@ document.getElementById('media-seek-input').addEventListener('keydown', (e) => {
 });
 
 async function loadMediaVoteCount() {
+  const requestIsCurrent = beginViewRequest('loadMediaVoteCount', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, currentSession.response_epoch]));
   if (!currentSession) return;
   const { count, error } = await supabaseClient
     .from('media_vote_responses')
     .select('*', { count: 'exact', head: true })
     .eq('session_id', currentSession.id);
+  if (!requestIsCurrent()) return;
 
   if (error) {
     handleQueryError(error);
@@ -2779,14 +2893,10 @@ function scheduleMediaVoteReconnect() {
 }
 
 function teardownMediaVoteSubscription() {
-  if (mediaVoteChannel) {
-    supabaseClient.removeChannel(mediaVoteChannel);
-    mediaVoteChannel = null;
-  }
-  if (mediaVoteReconnectTimer) {
-    clearTimeout(mediaVoteReconnectTimer);
-    mediaVoteReconnectTimer = null;
-  }
+  const channel = mediaVoteChannel, timer = mediaVoteReconnectTimer;
+  mediaVoteChannel = null;
+  mediaVoteReconnectTimer = null;
+  releaseSubscription(channel, timer);
 }
 
 // ---------------- Media Vote timeline (Stage 2) ----------------
@@ -2945,6 +3055,7 @@ document.getElementById('mediavote-timeline-wrap').addEventListener('click', asy
 });
 
 async function loadMediaVoteTimelineData() {
+  const requestIsCurrent = beginViewRequest('loadMediaVoteTimelineData', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, currentSession.response_epoch]));
   const [eventsRes, votesRes, optionsRes] = await Promise.all([
     supabaseClient
       .from('media_transport_events')
@@ -2962,6 +3073,7 @@ async function loadMediaVoteTimelineData() {
       .eq('session_id', currentSession.id)
       .order('sort_order', { ascending: true })
   ]);
+  if (!requestIsCurrent()) return;
 
   mediaVoteRawEvents = eventsRes.data || [];
   mediaVoteRawResponses = votesRes.data || [];
@@ -3002,8 +3114,16 @@ document.querySelectorAll('#mediavote-bucket-toggle button').forEach(btn => {
 });
 
 async function enterSession(session) {
-  stopMediaVotePositionTicker();
+  teardownSessionView();
   currentSession = session;
+  const entryIsCurrent = beginViewRequest('enterSession');
+  renderCollectionControl();
+  stopAdminSession = watchSession(session.id, async row => {
+    if (!currentSession || currentSession.id !== row.id) return;
+    if ((row.response_epoch || 0) !== (currentSession.response_epoch || 0)) { await enterSession(row); return; }
+    currentSession.submissions_open = row.submissions_open;
+    renderCollectionControl();
+  });
   document.getElementById('session-view-name').textContent = session.name;
   document.getElementById('session-view-code').textContent = session.session_code;
 
@@ -3027,6 +3147,7 @@ async function enterSession(session) {
   plainFeedCategories = null;
   if (feedViewMode === 'grouped') {
     await ensurePlainFeedCategoriesLoaded();
+  if (!entryIsCurrent()) return;
   }
   updateFeedViewModeIndicator();
 
@@ -3065,8 +3186,10 @@ async function enterSession(session) {
     document.getElementById('tally-grid').classList.add('hidden');
 
     await loadRankingItems();
+  if (!entryIsCurrent()) return;
     renderRankingItemList();
     await loadRankingTeamsAndSubmissions();
+  if (!entryIsCurrent()) return;
     renderRunningOrderActivity();
 
     activeRankingTeamId = session.active_ranking_team_id || null;
@@ -3083,6 +3206,7 @@ async function enterSession(session) {
     resultsRevealed = !!session.results_revealed;
     updateRevealUI();
     await loadQuickTapResults();
+  if (!entryIsCurrent()) return;
     setupTallySubscription();
   } else if (isTextMarkup) {
     document.getElementById('feed').classList.add('hidden');
@@ -3100,6 +3224,7 @@ async function enterSession(session) {
 
     activePromptId = session.active_prompt_id || null;
     await loadTextMarkupPrompts();
+  if (!entryIsCurrent()) return;
     renderPromptPicker();
     renderComparePicker();
     applyTextMarkupVisibility();
@@ -3113,6 +3238,7 @@ async function enterSession(session) {
     resultsRevealed = !!session.results_revealed;
     updateRevealUI();
     await loadTextMarkupAggregate();
+  if (!entryIsCurrent()) return;
     setupTextMarkupSubscription();
   } else if (isMediaVote) {
     document.getElementById('feed').classList.add('hidden');
@@ -3125,6 +3251,7 @@ async function enterSession(session) {
     updateMediaTransportUI();
     startMediaVotePositionTicker();
     await loadMediaVoteCount();
+  if (!entryIsCurrent()) return;
     setupMediaVoteSubscription();
 
     mediaPlayerReady = !!session.media_player_ready; // optimistic initial guess
@@ -3144,6 +3271,7 @@ async function enterSession(session) {
       .select('media_player_ready')
       .eq('id', session.id)
       .maybeSingle();
+  if (!entryIsCurrent()) return;
 
     if (!freshRowError && freshRow) {
       mediaPlayerReady = !!freshRow.media_player_ready;
@@ -3154,6 +3282,7 @@ async function enterSession(session) {
     mediaTimelineBucketSeconds = session.media_timeline_bucket_seconds || 5;
     renderMediaVoteBucketToggle();
     await loadMediaVoteTimelineData();
+  if (!entryIsCurrent()) return;
     renderMediaVoteTimeline();
 
     resultsRevealed = !!session.results_revealed;
@@ -3166,6 +3295,7 @@ async function enterSession(session) {
     activeCategoryId = isGuided ? (session.active_category_id || null) : null;
     if (isGuided) {
       await loadGuidedCategories();
+  if (!entryIsCurrent()) return;
       renderCategoryPicker();
     } else {
       guidedCategories = [];
@@ -3173,8 +3303,10 @@ async function enterSession(session) {
     applyGuidedVisibility();
 
     await loadInitialFeed();
+  if (!entryIsCurrent()) return;
     setupFeedSubscription();
     await loadParkedCount();
+  if (!entryIsCurrent()) return;
   }
 
   updateModeBadge();
@@ -3250,11 +3382,13 @@ let runningOrderChannel = null;
 let runningOrderReconnectTimer = null;
 
 async function loadRankingItems() {
+  const requestIsCurrent = beginViewRequest('loadRankingItems', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, currentSession.response_epoch]));
   const { data, error } = await supabaseClient
     .from('ranking_items')
     .select('*')
     .eq('session_id', currentSession.id)
     .order('sort_order', { ascending: true });
+  if (!requestIsCurrent()) return;
 
   if (error) {
     handleQueryError(error);
@@ -3356,27 +3490,30 @@ async function removeRankingItem(itemId) {
 }
 
 async function loadRankingTeamsAndSubmissions() {
+  const requestIsCurrent = beginViewRequest('loadRankingTeamsAndSubmissions', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, currentSession.response_epoch]));
   const { data: teams, error: teamsError } = await supabaseClient
     .from('ranking_teams')
     .select('*')
     .eq('session_id', currentSession.id);
+  if (!requestIsCurrent()) return;
 
   if (teamsError) {
     handleQueryError(teamsError);
     return;
   }
-  rankingTeams = teams || [];
+  rankingTeams = (teams || []).filter(team => !team.superseded);
 
   const { data: submissions, error: subsError } = await supabaseClient
     .from('ranking_submissions')
     .select('*')
     .eq('session_id', currentSession.id);
+  if (!requestIsCurrent()) return;
 
   if (subsError) {
     handleQueryError(subsError);
     return;
   }
-  rankingSubmissions = submissions || [];
+  rankingSubmissions = (submissions || []).filter(sub => rankingTeams.some(team => team.id === sub.team_id));
 }
 
 function renderRunningOrderActivity() {
@@ -3391,7 +3528,7 @@ function renderRunningOrderActivity() {
   const activeCount = rankingTeams.filter(t =>
     !submittedTeamIds.has(t.id) && new Date(t.last_activity_at).getTime() > fiveMinAgo
   ).length;
-  summaryEl.textContent = `${activeCount} active · ${submittedTeamIds.size} submitted · ${rankingTeams.length} total seen`;
+  summaryEl.textContent = `${activeCount} active · ${submittedTeamIds.size} submitted · ${rankingTeams.length} current teams`;
 }
 
 // Post-reveal only — pre-reveal, the room's projected display shows
@@ -3537,14 +3674,10 @@ function scheduleRunningOrderReconnect() {
 }
 
 function teardownRunningOrderSubscription() {
-  if (runningOrderChannel) {
-    supabaseClient.removeChannel(runningOrderChannel);
-    runningOrderChannel = null;
-  }
-  if (runningOrderReconnectTimer) {
-    clearTimeout(runningOrderReconnectTimer);
-    runningOrderReconnectTimer = null;
-  }
+  const channel = runningOrderChannel, timer = runningOrderReconnectTimer;
+  runningOrderChannel = null;
+  runningOrderReconnectTimer = null;
+  releaseSubscription(channel, timer);
 }
 
 // ---------------- Reset session responses ----------------
@@ -3553,140 +3686,10 @@ function teardownRunningOrderSubscription() {
 // below for the (much heavier-gated) whole-session removal.
 async function resetSessionResponses() {
   if (!currentSession) return;
-
-  const { error: fpError } = await supabaseClient
-    .from('friction_pool')
-    .delete()
-    .eq('session_id', currentSession.id);
-
-  if (fpError) {
-    showError('Could not reset responses: ' + fpError.message);
-    return;
-  }
-
-  const { error: qtError } = await supabaseClient
-    .from('quick_tap_responses')
-    .delete()
-    .eq('session_id', currentSession.id);
-
-  if (qtError) {
-    showError('Could not reset responses: ' + qtError.message);
-    return;
-  }
-
-  const { error: tmError } = await supabaseClient
-    .from('text_markup_responses')
-    .delete()
-    .eq('session_id', currentSession.id);
-
-  if (tmError) {
-    showError('Could not reset responses: ' + tmError.message);
-    return;
-  }
-
-  const { error: mvError } = await supabaseClient
-    .from('media_vote_responses')
-    .delete()
-    .eq('session_id', currentSession.id);
-
-  if (mvError) {
-    showError('Could not reset responses: ' + mvError.message);
-    return;
-  }
-
-  const { error: mtError } = await supabaseClient
-    .from('media_transport_events')
-    .delete()
-    .eq('session_id', currentSession.id);
-
-  if (mtError) {
-    showError('Could not reset responses: ' + mtError.message);
-    return;
-  }
-
-  // Deleting ranking_teams cascades to ranking_moves/ranking_submissions
-  // (both FK on delete cascade), but each gets its own explicit, checked
-  // delete here anyway, same as every table above — ranking_items is kept,
-  // same as every other session type keeps its configuration.
-  const { error: rtError } = await supabaseClient
-    .from('ranking_teams')
-    .delete()
-    .eq('session_id', currentSession.id);
-
-  if (rtError) {
-    showError('Could not reset responses: ' + rtError.message);
-    return;
-  }
-
-  const { error: rmError } = await supabaseClient
-    .from('ranking_moves')
-    .delete()
-    .eq('session_id', currentSession.id);
-
-  if (rmError) {
-    showError('Could not reset responses: ' + rmError.message);
-    return;
-  }
-
-  const { error: rsError } = await supabaseClient
-    .from('ranking_submissions')
-    .delete()
-    .eq('session_id', currentSession.id);
-
-  if (rsError) {
-    showError('Could not reset responses: ' + rsError.message);
-    return;
-  }
-
-  const updatePayload = { results_revealed: false };
-  if (currentSession.guided_categories) {
-    updatePayload.active_category_id = null;
-  }
-  if (currentSession.text_markup_enabled) {
-    updatePayload.active_prompt_id = null;
-  }
-  if (currentSession.media_vote_enabled) {
-    updatePayload.media_transport_action = null;
-    updatePayload.media_transport_position_ms = null;
-    updatePayload.media_transport_issued_at = null;
-    updatePayload.media_transport_seq = 0;
-  }
-  if (currentSession.running_order_enabled) {
-    updatePayload.active_ranking_team_id = null;
-    updatePayload.ranking_view_mode = null;
-  }
-
-  const { error: sessError } = await supabaseClient
-    .from('sessions')
-    .update(updatePayload)
-    .eq('id', currentSession.id);
-
-  if (sessError) {
-    showError('Responses cleared, but failed to reset session state: ' + sessError.message);
-    return;
-  }
-
-  currentSession.results_revealed = false;
-  if (currentSession.guided_categories) {
-    currentSession.active_category_id = null;
-  }
-  if (currentSession.text_markup_enabled) {
-    currentSession.active_prompt_id = null;
-  }
-  if (currentSession.media_vote_enabled) {
-    currentSession.media_transport_action = null;
-    currentSession.media_transport_position_ms = null;
-    currentSession.media_transport_issued_at = null;
-    currentSession.media_transport_seq = 0;
-  }
-  if (currentSession.running_order_enabled) {
-    currentSession.active_ranking_team_id = null;
-    currentSession.ranking_view_mode = null;
-  }
-
-  // Re-run the same load path used to enter the session in the first
-  // place — refreshes feed/tally/guided state live, no page reload.
-  await enterSession(currentSession);
+  const sessionId = currentSession.id;
+  const { data, error } = await supabaseClient.rpc('reset_session_responses', { p_session_id: sessionId }).single();
+  if (error) { showError('Could not reset responses: ' + error.message); return; }
+  if (currentSession && currentSession.id === sessionId) await enterSession(data);
 }
 
 let resetConfirming = false;
@@ -3845,6 +3848,7 @@ document.getElementById('delete-session-btn').addEventListener('click', () => {
 });
 
 async function loadInitialFeed() {
+  const requestIsCurrent = beginViewRequest('loadInitialFeed', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, activeCategoryId]));
   const feedEl = document.getElementById('feed');
   const isGuided = !currentSession.quick_tap_enabled && !!currentSession.guided_categories;
 
@@ -3867,6 +3871,7 @@ async function loadInitialFeed() {
   }
 
   const { data, error } = await query.order('created_at', { ascending: false });
+  if (!requestIsCurrent()) return;
 
   if (error) {
     handleQueryError(error);
@@ -3909,11 +3914,13 @@ function updateParkedCountBadge() {
 }
 
 async function loadParkedCount() {
+  const requestIsCurrent = beginViewRequest('loadParkedCount', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, currentSession.response_epoch]));
   const { count, error } = await supabaseClient
     .from('friction_pool')
     .select('id', { count: 'exact', head: true })
     .eq('session_id', currentSession.id)
     .eq('status', 'parked');
+  if (!requestIsCurrent()) return;
 
   if (error) {
     handleQueryError(error);
@@ -3964,6 +3971,7 @@ function renderParkedEntry(row, categoryLabel) {
 }
 
 async function loadParkedList() {
+  const requestIsCurrent = beginViewRequest('loadParkedList', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, showingParked]));
   const listEl = document.getElementById('parked-list');
   listEl.innerHTML = '';
 
@@ -3973,6 +3981,7 @@ async function loadParkedList() {
     .eq('session_id', currentSession.id)
     .eq('status', 'parked')
     .order('created_at', { ascending: false });
+  if (!requestIsCurrent()) return;
 
   if (error) {
     handleQueryError(error);
@@ -4103,12 +4112,14 @@ let feedViewMode = 'chronological'; // 'chronological' | 'grouped' — mirrors c
 let plainFeedCategories = null; // lazy-loaded on first switch to grouped view
 
 async function ensurePlainFeedCategoriesLoaded() {
+  const requestIsCurrent = beginViewRequest('ensurePlainFeedCategoriesLoaded', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, feedViewMode]));
   if (plainFeedCategories) return plainFeedCategories;
   const { data, error } = await supabaseClient
     .from('session_categories')
     .select('*')
     .eq('session_id', currentSession.id)
     .order('sort_order', { ascending: true });
+  if (!requestIsCurrent()) return;
   plainFeedCategories = error ? [] : (data || []);
   return plainFeedCategories;
 }
@@ -4299,14 +4310,10 @@ function scheduleReconnect() {
 }
 
 function teardownFeedSubscription() {
-  if (feedChannel) {
-    supabaseClient.removeChannel(feedChannel);
-    feedChannel = null;
-  }
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
+  const channel = feedChannel, timer = reconnectTimer;
+  feedChannel = null;
+  reconnectTimer = null;
+  releaseSubscription(channel, timer);
 }
 
 // ---------------- Quick-tap results (buttons / bar / pie / sparkline / traffic light) ----------------
@@ -4320,11 +4327,13 @@ let CHART_TYPES = ['buttons', 'bar', 'pie'];
 let chartType = 'buttons';
 
 async function loadQuickTapResults() {
+  const requestIsCurrent = beginViewRequest('loadQuickTapResults', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, currentSession.response_epoch]));
   const { data: options, error: optError } = await supabaseClient
     .from('quick_tap_options')
     .select('*')
     .eq('session_id', currentSession.id)
     .order('sort_order', { ascending: true });
+  if (!requestIsCurrent()) return;
 
   if (optError) {
     handleQueryError(optError);
@@ -4356,6 +4365,7 @@ async function loadQuickTapResults() {
     .select('id, option_id, device_id, created_at')
     .eq('session_id', currentSession.id)
     .order('created_at', { ascending: true });
+  if (!requestIsCurrent()) return;
 
   quickTapResponseLog = respError ? [] : (responses || []);
   quickTapCounts = {};
@@ -4792,14 +4802,10 @@ function scheduleTallyReconnect() {
 }
 
 function teardownTallySubscription() {
-  if (tallyChannel) {
-    supabaseClient.removeChannel(tallyChannel);
-    tallyChannel = null;
-  }
-  if (tallyReconnectTimer) {
-    clearTimeout(tallyReconnectTimer);
-    tallyReconnectTimer = null;
-  }
+  const channel = tallyChannel, timer = tallyReconnectTimer;
+  tallyChannel = null;
+  tallyReconnectTimer = null;
+  releaseSubscription(channel, timer);
 }
 
 function handleQueryError(error) {
