@@ -8,11 +8,21 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.2**
+**Current version: 2.3.4**
 
 ---
 
 ## Log
+
+### 2.3.4 — 2026-09-18
+`index.html` header now carries a small mark: two overlapping circles (inline SVG, no new
+dependency) next to the "kyomei" wordmark — one full-opacity, one at 45%, standing for two things
+in sympathetic resonance. Picked from four sketched directions; the kanji-seal and wave-sync
+alternatives are parked, not built.
+
+### 2.3.3 — 2026-09-18
+Admin footer (`kyomei-admin.html`) now credits the name's origin: "kyomei 共鳴 — resonance,
+sympathetic response, or shared feelings" ahead of the existing facilitation-software credit line.
 
 ### 2.3.2 — 2026-09-18
 Fixed a stale-UI leak in `kyomei-admin.html`: `enterSession()`'s plain text-response/guided branch
