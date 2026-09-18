@@ -774,6 +774,7 @@
         <button class="ghost hidden" type="button" id="parked-toggle-btn">Parked (<span id="parked-count">0</span>)</button>
       </div>
       <div id="feed-view-mode-indicator" class="feed-view-mode-indicator hidden">Grouped by category (press G to toggle)</div>
+      <div id="feed-masonry-indicator" class="feed-view-mode-indicator hidden">Wall view on display (press M to toggle)</div>
       <div id="feed" class="feed"></div>
       <div id="feed-empty" class="empty-feed">Waiting for submissions…</div>
       <div id="parked-list" class="feed hidden"></div>
@@ -3166,6 +3167,13 @@ async function enterSession(session) {
   }
   updateFeedViewModeIndicator();
 
+  // Wall view only ever applies where grouping does (see comment above) —
+  // it restyles the projected display's feed into a masonry wall, not
+  // admin's own feed, which keeps Park/Delete usable rather than squeezed
+  // into a narrow column.
+  feedMasonryOn = feedGroupedApplies && !!session.feed_masonry;
+  updateFeedMasonryIndicator();
+
   document.getElementById('results-heading').textContent =
     isQuickTap ? 'Live results' : (isTextMarkup ? 'Text markup responses' : 'Live feed');
   document.getElementById('results-heading').classList.toggle('hidden', isMediaVote || isRunningOrder);
@@ -4020,6 +4028,7 @@ async function toggleParkedView() {
     document.getElementById('feed').classList.add('hidden');
     document.getElementById('feed-empty').classList.add('hidden');
     document.getElementById('feed-view-mode-indicator').classList.add('hidden');
+    document.getElementById('feed-masonry-indicator').classList.add('hidden');
     document.getElementById('parked-list').classList.remove('hidden');
     await loadParkedList();
   } else {
@@ -4028,6 +4037,7 @@ async function toggleParkedView() {
     document.getElementById('parked-empty').classList.add('hidden');
     applyFeedViewMode();
     updateFeedViewModeIndicator();
+    updateFeedMasonryIndicator();
   }
 }
 
@@ -4233,6 +4243,51 @@ document.addEventListener('keydown', (e) => {
   if (!isPlainTextSession) return;
   e.preventDefault();
   toggleFeedViewMode();
+});
+
+// ---------------- Wall view (masonry) — display only ----------------
+// Driven by sessions.feed_masonry, same pattern as feed_grouped, but it
+// only restyles kyomei-display.html's projected feed. Admin's own feed
+// keeps its normal single column — feed-entry rows carry Park/Delete
+// buttons that don't fit a narrow masonry column.
+let feedMasonryOn = false; // mirrors currentSession.feed_masonry
+
+function updateFeedMasonryIndicator() {
+  const el = document.getElementById('feed-masonry-indicator');
+  if (el) el.classList.toggle('hidden', !feedMasonryOn);
+}
+
+async function toggleFeedMasonry() {
+  const previous = feedMasonryOn;
+  const newMasonry = !feedMasonryOn;
+
+  feedMasonryOn = newMasonry;
+  updateFeedMasonryIndicator();
+
+  const { error } = await supabaseClient
+    .from('sessions')
+    .update({ feed_masonry: newMasonry })
+    .eq('id', currentSession.id);
+
+  if (error) {
+    feedMasonryOn = previous;
+    updateFeedMasonryIndicator();
+    handleQueryError(error);
+    return;
+  }
+
+  currentSession.feed_masonry = newMasonry;
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'm' && e.key !== 'M') return;
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if (!currentSession || screens.sessionView.classList.contains('hidden')) return;
+  const isPlainTextSession = !currentSession.quick_tap_enabled && !currentSession.guided_categories && !currentSession.text_markup_enabled && !currentSession.media_vote_enabled && !currentSession.running_order_enabled;
+  if (!isPlainTextSession) return;
+  e.preventDefault();
+  toggleFeedMasonry();
 });
 
 async function moderateEntry(id, status) {

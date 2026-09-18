@@ -136,6 +136,14 @@
     padding: 28px 32px;
     text-align: left;
   }
+  .feed-list.masonry-layout {
+    display: block;
+    columns: 3 360px;
+  }
+  .feed-list.masonry-layout .feed-card {
+    break-inside: avoid;
+    margin: 0 0 18px;
+  }
   .feed-card-text {
     font-size: clamp(1.4rem, 2.4vw, 2.1rem);
     line-height: 1.4;
@@ -588,6 +596,7 @@
     <div class="feed-session-name" id="feed-session-name"></div>
     <div class="feed-category-label hidden" id="feed-category-label"></div>
     <div id="feed-view-mode-indicator" class="feed-view-mode-indicator hidden">Grouped by category (press G to toggle)</div>
+    <div id="feed-masonry-indicator" class="feed-view-mode-indicator hidden">Wall view (press M to toggle)</div>
   </div>
   <div id="feed-list" class="feed-list"></div>
   <div id="feed-empty-msg" class="feed-empty-msg hidden">Waiting for submissions…</div>
@@ -1039,6 +1048,17 @@ function updateFeedViewModeIndicator() {
   if (el) el.classList.toggle('hidden', feedViewMode !== 'grouped');
 }
 
+// ---------------- Wall view (masonry) ----------------
+// Driven entirely by sessions.feed_masonry — same pattern as feed_grouped
+// above, admin's M key is the only thing that ever changes this.
+let feedMasonryOn = false;
+
+function updateFeedMasonryIndicator() {
+  const el = document.getElementById('feed-masonry-indicator');
+  if (el) el.classList.toggle('hidden', !feedMasonryOn);
+  document.getElementById('feed-list').classList.toggle('masonry-layout', feedMasonryOn);
+}
+
 async function setFeedGrouped(grouped) {
   if (displayMode !== 'plain') return;
   const isCurrentlyGrouped = feedViewMode === 'grouped';
@@ -1116,6 +1136,9 @@ async function initPlainFeedDisplay(session) {
     feedViewMode = 'grouped';
   }
   updateFeedViewModeIndicator();
+
+  feedMasonryOn = !!session.feed_masonry;
+  updateFeedMasonryIndicator();
 
   await loadFeed();
   setupFeedSubscription();
@@ -3045,6 +3068,15 @@ function setupSessionsSubscription() {
         currentSession.feed_grouped = newFeedGrouped;
         await setFeedGrouped(newFeedGrouped);
       if (!updateIsCurrent()) return;
+      }
+
+      // Only meaningful for displayMode === 'plain' — admin's M key is the
+      // only thing that ever changes this.
+      const newFeedMasonry = !!payload.new.feed_masonry;
+      if (displayMode === 'plain' && newFeedMasonry !== !!currentSession.feed_masonry) {
+        currentSession.feed_masonry = newFeedMasonry;
+        feedMasonryOn = newFeedMasonry;
+        updateFeedMasonryIndicator();
       }
 
       if (displayMode === 'guided') {

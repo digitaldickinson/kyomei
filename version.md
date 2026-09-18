@@ -8,11 +8,21 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.6**
+**Current version: 2.3.7**
 
 ---
 
 ## Log
+
+### 2.3.7 — 2026-09-18 — **schema**
+Added a "wall view" masonry layout for the plain Text response feed on `kyomei-display.html` — a
+CSS `columns: 3 360px` alternative to the normal single-column cascade, toggled from admin with the
+new **M** key (same pattern as the existing **G** grouped-feed toggle: gated to plain, non-guided
+text-response sessions, broadcast live via a new `sessions.feed_masonry` boolean). Admin's own live
+feed stays single-column regardless — its Park/Delete buttons don't fit a narrow masonry column.
+New migration `migrations/003_feed_masonry.sql`; `friction_pool_schema.sql` and
+`OPERATORS_MANUAL.md`'s shortcut tables updated to match. Needs a manual migration run against
+Supabase before the toggle will do anything in production.
 
 ### 2.3.6 — 2026-09-18
 Twin-rings mark rolled out to the rest of the app: all six per-session-type screens in

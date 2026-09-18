@@ -15,24 +15,27 @@ All shortcuts are global to the admin console (not the display), work only while
 |---|---|---|
 | **L** | Show/hide the join QR code and URL on the display | Every session type |
 | **G** | Toggle the live feed between chronological and grouped-by-category | Text response sessions only, and only when not guided |
+| **M** | Toggle the display's feed between the normal single-column cascade and a multi-column wall view | Text response sessions only, and only when not guided |
 | **Space** | Cycle the results chart type | Quick-tap and Text markup sessions, only once results are revealed |
 
-The join info overlay (**L**) and grouped feed (**G**) are broadcast to the display live — what you
-toggle in admin is what the room sees, in real time.
+The join info overlay (**L**), grouped feed (**G**), and wall view (**M**) are broadcast to the
+display live — what you toggle in admin is what the room sees, in real time. Wall view only
+restyles the display's feed; your own live feed in admin stays single-column either way, since the
+Park/Delete buttons on each response don't fit a narrow column.
 
 ### By session type
 
 A key that "does nothing" for a session type is safe to press — it's a no-op, not an error.
 
-| Session type | L (join info) | G (group feed) | Space (cycle view) |
-|---|---|---|---|
-| Text response — plain | ✓ | ✓ | — (feed only, nothing to cycle) |
-| Text response — guided | ✓ | — | — |
-| Quick-tap — configured buttons | ✓ | — | ✓ Buttons → Bar → Pie |
-| Quick-tap — Pulse Check (traffic light / confidence) | ✓ | — | — (single dedicated view) |
-| Text markup | ✓ | — | ✓ Heatmap → Community highlights |
-| Media Vote | ✓ | — | — |
-| Running Order | ✓ | — | — |
+| Session type | L (join info) | G (group feed) | M (wall view) | Space (cycle view) |
+|---|---|---|---|---|
+| Text response — plain | ✓ | ✓ | ✓ | — (feed only, nothing to cycle) |
+| Text response — guided | ✓ | — | — | — |
+| Quick-tap — configured buttons | ✓ | — | — | ✓ Buttons → Bar → Pie |
+| Quick-tap — Pulse Check (traffic light / confidence) | ✓ | — | — | — (single dedicated view) |
+| Text markup | ✓ | — | — | ✓ Heatmap → Community highlights |
+| Media Vote | ✓ | — | — | — |
+| Running Order | ✓ | — | — | — |
 
 Text markup's heatmap has two additional view controls (Solo selections / Colorblind palette) —
 these are buttons next to the heatmap, not keyboard shortcuts. See §4.
