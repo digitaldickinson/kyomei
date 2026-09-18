@@ -8,11 +8,26 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.0**
+**Current version: 2.3.2**
 
 ---
 
 ## Log
+
+### 2.3.2 — 2026-09-18
+Fixed a stale-UI leak in `kyomei-admin.html`: `enterSession()`'s plain text-response/guided branch
+never hid `textmarkup-count-display`, `textmarkup-compare-row`, or `mediavote-timeline-display`, so
+a revealed Text Markup (or Media Vote) session's results panel stayed visible after switching to a
+plain Text Response session, until a full page reload rebuilt the DOM from its initially-hidden
+state. Reported: set up a Text Response session, opened a separate Text Markup session, deleted it,
+and returned to the Text Response session — its admin view still showed the Text Markup heatmap and
+"Compare with…" row on top of the live feed.
+
+### 2.3.1 — 2026-09-18
+Text response display feed (`kyomei-display.html`) no longer echoes the category label on each
+card — just the response text now. The colored left border (still keyed to category) is untouched.
+Admin's own live feed still shows the category label per card, since the tutor needs it for
+moderation context.
 
 ### 2.3.0 — 2026-09-16 — **schema**
 Added independent open/close collection controls, session duplication with fresh responses, and paginated CSV export. Student pages show connection/receipt status and preserve text, prompt highlights, and ranking drafts locally; reset rounds isolate stale drafts and vote locks. Running Order uses the explicit collection switch rather than reveal to freeze submissions.

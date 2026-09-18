@@ -3291,6 +3291,9 @@ async function enterSession(session) {
     document.getElementById('results-hidden-status').classList.add('hidden');
     document.getElementById('tally-grid').classList.add('hidden');
     document.getElementById('textmarkup-waiting-status').classList.add('hidden');
+    document.getElementById('textmarkup-compare-row').classList.add('hidden');
+    document.getElementById('textmarkup-count-display').classList.add('hidden');
+    document.getElementById('mediavote-timeline-display').classList.add('hidden');
 
     activeCategoryId = isGuided ? (session.active_category_id || null) : null;
     if (isGuided) {
