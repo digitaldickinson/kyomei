@@ -8,11 +8,24 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.4**
+**Current version: 2.3.6**
 
 ---
 
 ## Log
+
+### 2.3.6 — 2026-09-18
+Twin-rings mark rolled out to the rest of the app: all six per-session-type screens in
+`kyomei.html` (form, guided, text markup, quick-tap, media vote, running order) and the
+`kyomei-admin.html` session-list top bar ("kyomei:Sessions"), each at the small 24px inline scale.
+`kyomei-display.html` deliberately left untouched — that screen stays projector-clean, text only.
+
+### 2.3.5 — 2026-09-18
+`index.html`'s mark + wordmark moved into a full-width banner strip at the top (48px mark, 36px
+heading, panel background, bottom border) instead of sitting inline at body-text scale. Same mark
+added to `kyomei-admin.html`'s login screen, at the original small (24px) inline scale next to that
+screen's own "kyomei" heading — not touched: the "kyomei:Sessions" heading inside the working app,
+since that's a functional top bar, not a branding moment.
 
 ### 2.3.4 — 2026-09-18
 `index.html` header now carries a small mark: two overlapping circles (inline SVG, no new

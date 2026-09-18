@@ -22,17 +22,22 @@
     color: var(--text);
     min-height: 100vh;
   }
+  .banner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 36px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .banner svg { flex: 0 0 auto; width: 48px; height: 48px; }
+  .banner h1 { font-size: 36px; margin: 0; letter-spacing: -0.01em; }
   .wrap {
     max-width: 480px;
     margin: 0 auto;
-    padding: 20px 16px 40px;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
+    padding: 24px 16px 40px;
   }
-  .brand-row { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; }
-  .brand-row svg { flex: 0 0 auto; width: 24px; height: 24px; }
-  h1 { font-size: 22px; margin: 0; }
   .subtitle { color: var(--muted); font-size: 14px; margin-bottom: 20px; }
   .links { display: flex; flex-direction: column; gap: 12px; }
   a.link-card {
@@ -50,14 +55,14 @@
 </style>
 </head>
 <body>
+  <header class="banner">
+    <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
+      <circle cx="24" cy="32" r="16" stroke="#5b8cff" stroke-width="5"/>
+      <circle cx="40" cy="32" r="16" stroke="#5b8cff" stroke-width="5" opacity="0.45"/>
+    </svg>
+    <h1>kyomei</h1>
+  </header>
   <div class="wrap">
-    <div class="brand-row">
-      <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
-        <circle cx="24" cy="32" r="16" stroke="#5b8cff" stroke-width="5"/>
-        <circle cx="40" cy="32" r="16" stroke="#5b8cff" stroke-width="5" opacity="0.45"/>
-      </svg>
-      <h1>kyomei</h1>
-    </div>
     <div class="subtitle">Choose a page.</div>
     <div class="links">
       <a class="link-card" href="kyomei-admin.html">

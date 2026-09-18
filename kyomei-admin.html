@@ -142,6 +142,9 @@
   .login-box { width: 360px; }
   .login-box input { margin-bottom: 12px; }
   .login-sent { color: var(--ok); font-size: 14px; margin-top: 8px; }
+  .brand-row { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; }
+  .brand-row svg { flex: 0 0 auto; width: 24px; height: 24px; }
+  .brand-row h1 { margin: 0; }
 
   /* ---- Session list ---- */
   .session-row {
@@ -497,7 +500,13 @@
 <!-- ============ LOGIN SCREEN ============ -->
 <div id="login-screen">
   <div class="panel login-box">
-    <h1>kyomei</h1>
+    <div class="brand-row">
+      <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
+        <circle cx="24" cy="32" r="16" stroke="#5b8cff" stroke-width="5"/>
+        <circle cx="40" cy="32" r="16" stroke="#5b8cff" stroke-width="5" opacity="0.45"/>
+      </svg>
+      <h1>kyomei</h1>
+    </div>
     <p class="muted">Tutor admin — sign in with a magic link.</p>
     <div id="login-error" class="error-banner hidden"></div>
     <div id="login-form">
@@ -517,7 +526,13 @@
     <!-- ---- Session list screen ---- -->
     <div id="session-list-screen">
       <div class="top-row">
-        <h1>kyomei:Sessions</h1>
+        <div class="brand-row">
+          <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
+            <circle cx="24" cy="32" r="16" stroke="#5b8cff" stroke-width="5"/>
+            <circle cx="40" cy="32" r="16" stroke="#5b8cff" stroke-width="5" opacity="0.45"/>
+          </svg>
+          <h1>kyomei:Sessions</h1>
+        </div>
         <button class="primary" id="show-new-session-btn">+ New session</button>
       </div>
       <div class="panel pulse-check-panel">
