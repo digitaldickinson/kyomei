@@ -1,0 +1,1148 @@
+-- Friction Pool — Stage 1 (Collection) schema + RLS
+-- Run once in Supabase SQL editor.
+-- BEFORE RUNNING: replace 'YOUR_EMAIL_HERE' below with your actual login email.
+
+create extension if not exists "pgcrypto";
+
+-- ---------- Tables ----------
+
+create table if not exists sessions (
+  id uuid primary key default gen_random_uuid(),
+  session_code text not null unique,   -- e.g. 'MPJ1-Wk4-PitchDrill', typed by tutor, encoded in QR URL
+  name text not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists session_categories (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references sessions(id) on delete cascade,
+  label text not null,                 -- e.g. 'Editorial', 'Technical', tutor-defined per session
+  sort_order int not null default 0,
+  created_at timestamptz not null default now(),
+  unique (session_id, label)
+);
+
+create table if not exists friction_pool (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  session_id uuid not null references sessions(id) on delete cascade,
+  category_id uuid not null references session_categories(id) on delete restrict,
+  scenario text not null,
+  status text not null default 'active' check (status in ('active','parked','deleted'))
+);
+
+create index if not exists idx_friction_pool_session_status on friction_pool(session_id, status);
+create index if not exists idx_session_categories_session on session_categories(session_id);
+
+-- ---------- Row Level Security ----------
+
+alter table sessions enable row level security;
+alter table session_categories enable row level security;
+alter table friction_pool enable row level security;
+
+-- Single-user admin check. No service_role key needed anywhere in the client files.
+create or replace function is_admin() returns boolean
+language sql stable
+as $$
+  select auth.jwt() ->> 'email' = 'YOUR_EMAIL_HERE';
+$$;
+
+-- sessions: anyone can read (needed so the student app can resolve session_code -> id),
+-- only the authenticated admin can create/edit
+drop policy if exists "anon can read sessions" on sessions;
+create policy "anon can read sessions" on sessions
+  for select using (true);
+drop policy if exists "admin can manage sessions" on sessions;
+create policy "admin can manage sessions" on sessions
+  for all using (is_admin()) with check (is_admin());
+
+-- session_categories: anyone can read (student dropdown needs this),
+-- only admin can define/edit categories
+drop policy if exists "anon can read categories" on session_categories;
+create policy "anon can read categories" on session_categories
+  for select using (true);
+drop policy if exists "admin can manage categories" on session_categories;
+create policy "admin can manage categories" on session_categories
+  for all using (is_admin()) with check (is_admin());
+
+-- friction_pool: anon can insert (always as status='active'), and can only
+-- ever read active rows. Admin can read everything and update status
+-- (this is how Park/Delete work — no anon UPDATE/DELETE policy exists at all).
+drop policy if exists "anon can insert scenarios" on friction_pool;
+create policy "anon can insert scenarios" on friction_pool
+  for insert with check (status = 'active');
+drop policy if exists "anon can read active scenarios" on friction_pool;
+create policy "anon can read active scenarios" on friction_pool
+  for select using (status = 'active' or is_admin());
+drop policy if exists "admin can update scenarios" on friction_pool;
+create policy "admin can update scenarios" on friction_pool
+  for update using (is_admin()) with check (is_admin());
+
+-- ---------- Realtime ----------
+-- Realtime is NOT automatic — the admin live feed depends on this.
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'friction_pool'
+  ) then
+    alter publication supabase_realtime add table friction_pool;
+  end if;
+end $$;
+
+-- ==========================================================================
+-- Quick-tap mode (added after Stage 1) — instant-submit polling, separate
+-- from the text-response session_categories/friction_pool flow above.
+-- Safe to re-run against an already-provisioned project: every statement
+-- below is idempotent (IF NOT EXISTS / ADD COLUMN IF NOT EXISTS).
+-- ==========================================================================
+
+alter table sessions add column if not exists quick_tap_enabled boolean not null default false;
+
+create table if not exists quick_tap_options (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references sessions(id) on delete cascade,
+  label text not null,                 -- e.g. 'Yes' / 'No', or 'Shot 1'..'Shot 6' — tutor-defined, max 6 per session (enforced client-side)
+  sort_order int not null default 0,
+  created_at timestamptz not null default now(),
+  unique (session_id, label)
+);
+
+create table if not exists quick_tap_responses (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  session_id uuid not null references sessions(id) on delete cascade,
+  option_id uuid not null references quick_tap_options(id) on delete cascade
+);
+
+create index if not exists idx_quick_tap_options_session on quick_tap_options(session_id);
+create index if not exists idx_quick_tap_responses_session on quick_tap_responses(session_id);
+create index if not exists idx_quick_tap_responses_option on quick_tap_responses(option_id);
+
+alter table quick_tap_options enable row level security;
+alter table quick_tap_responses enable row level security;
+
+-- quick_tap_options: anon needs to read the button labels to render them;
+-- only admin defines them (created alongside the session).
+drop policy if exists "anon can read quick tap options" on quick_tap_options;
+create policy "anon can read quick tap options" on quick_tap_options
+  for select using (true);
+drop policy if exists "admin can manage quick tap options" on quick_tap_options;
+create policy "admin can manage quick tap options" on quick_tap_options
+  for all using (is_admin()) with check (is_admin());
+
+-- quick_tap_responses: anon can insert (a tap = an anonymous vote), but
+-- can never read responses back — only the admin sees the live tally.
+drop policy if exists "anon can insert quick tap responses" on quick_tap_responses;
+create policy "anon can insert quick tap responses" on quick_tap_responses
+  for insert with check (true);
+drop policy if exists "admin can read quick tap responses" on quick_tap_responses;
+create policy "admin can read quick tap responses" on quick_tap_responses
+  for select using (is_admin());
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'quick_tap_responses'
+  ) then
+    alter publication supabase_realtime add table quick_tap_responses;
+  end if;
+end $$;
+
+-- Per-option button color (hex), tutor-picked from a fixed palette client-side.
+alter table quick_tap_options add column if not exists color text;
+
+-- ==========================================================================
+-- Patch: session list aggregate, one-vote-per-device, tally reveal gate
+-- ==========================================================================
+
+-- Server-side badge-count aggregate, replacing full-table client scans.
+create or replace function session_counts()
+returns table(session_id uuid, active_count bigint, tap_count bigint)
+language sql stable
+as $$
+  select s.id,
+    coalesce(fp.cnt, 0) as active_count,
+    coalesce(qt.cnt, 0) as tap_count
+  from sessions s
+  left join (select session_id, count(*) cnt from friction_pool where status = 'active' group by session_id) fp
+    on fp.session_id = s.id
+  left join (select session_id, count(*) cnt from quick_tap_responses group by session_id) qt
+    on qt.session_id = s.id;
+$$;
+
+revoke execute on function session_counts() from public;
+grant execute on function session_counts() to authenticated;
+
+-- Client-side soft lock only — no student identity exists in this system by
+-- design, so this deters casual repeat-voting, not deliberate evasion.
+alter table sessions add column if not exists one_vote_per_device boolean not null default false;
+
+-- Tutor-controlled reveal gate for quick-tap live tallies, default hidden,
+-- to avoid visible-running-count herding while students are still voting.
+alter table sessions add column if not exists results_revealed boolean not null default false;
+
+-- ==========================================================================
+-- Guided category mode (text-response sessions only) — tutor controls which
+-- category is currently visible/submittable to students.
+-- ==========================================================================
+
+alter table sessions add column if not exists guided_categories boolean not null default false;
+
+-- Null means guided mode is on but nothing has been revealed yet (the
+-- waiting state, not an error state) — not the same as "no guided mode".
+alter table sessions add column if not exists active_category_id uuid references session_categories(id) on delete set null;
+
+-- Students subscribe to UPDATE events on their own session row to see the
+-- tutor's category switches live — sessions was never added to the
+-- realtime publication before now (the anon "select using (true)" policy
+-- already covers what Realtime is allowed to broadcast to them).
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'sessions'
+  ) then
+    alter publication supabase_realtime add table sessions;
+  end if;
+end $$;
+
+-- ==========================================================================
+-- Onscreen display (kyomei-display.html) — public, unauthenticated read path
+-- for quick-tap results, gated by the same results_revealed flag already
+-- used to prevent herding. Additive alongside the existing admin policy —
+-- SELECT policies are OR'd, so is_admin() access is unaffected.
+-- ==========================================================================
+
+drop policy if exists "anon can read revealed quick tap responses" on quick_tap_responses;
+create policy "anon can read revealed quick tap responses" on quick_tap_responses
+  for select using (
+    exists (
+      select 1 from sessions s
+      where s.id = quick_tap_responses.session_id
+      and s.results_revealed = true
+    )
+  );
+
+-- ==========================================================================
+-- Quick-tap heading — the question/prompt the buttons are answering, shown
+-- in the same heading slot guided-category-mode uses for the category
+-- label (student app, room display, admin tally view).
+-- ==========================================================================
+
+alter table sessions add column if not exists quick_tap_heading text;
+
+-- ==========================================================================
+-- Session archive — soft, reversible tidy-up flag for the session list.
+-- Covered by the existing "admin can manage sessions" policy, no new RLS.
+-- Hard delete needs no schema change at all: every child table already
+-- cascades from sessions (on delete cascade), and DELETE is already
+-- covered by the same admin policy.
+-- ==========================================================================
+
+alter table sessions add column if not exists archived boolean not null default false;
+
+-- ==========================================================================
+-- Confidence sparkline support — device_id lets the trend line use
+-- last-observation-carried-forward per device instead of raw tap volume,
+-- so a student retapping repeatedly doesn't dominate the line over one who
+-- tapped once. Not real identity: nullable, no FK, client-generated.
+-- Existing insert policy (with check (true)) already covers it.
+-- ==========================================================================
+
+alter table quick_tap_responses add column if not exists device_id text;
+
+-- ==========================================================================
+-- Pulse Check quick-launch — explicit, reliable session typing, replacing
+-- the fragile "does every option label parse as an integer" inference.
+-- null = ordinary/manually-configured quick-tap session (buttons/bar/pie
+-- cycle, unchanged). 'traffic_light' / 'confidence' are the two one-click
+-- launcher types and drive dedicated single-view displays.
+-- No RLS change needed — already covered by the existing sessions policies.
+-- ==========================================================================
+
+alter table sessions add column if not exists quick_tap_style text
+  check (quick_tap_style is null or quick_tap_style in ('traffic_light', 'confidence'));
+
+-- ==========================================================================
+-- Join-info overlay — admin-triggered (L key) so the tutor never has to
+-- physically reach the display device to show/hide the QR + join link.
+-- No RLS change needed — already covered by the existing sessions policies.
+-- ==========================================================================
+
+alter table sessions add column if not exists show_join_info boolean not null default false;
+
+-- ==========================================================================
+-- Reset session responses — clears collected data while leaving session
+-- configuration untouched. Neither table had a DELETE policy before now
+-- (friction_pool only had UPDATE for Park/Delete-entry status changes;
+-- quick_tap_responses only had INSERT/SELECT) — Reset needs a real delete
+-- path for the admin.
+-- ==========================================================================
+
+drop policy if exists "admin can delete friction pool entries" on friction_pool;
+create policy "admin can delete friction pool entries" on friction_pool
+  for delete using (is_admin());
+
+drop policy if exists "admin can delete quick tap responses" on quick_tap_responses;
+create policy "admin can delete quick tap responses" on quick_tap_responses
+  for delete using (is_admin());
+
+-- ==========================================================================
+-- Group-by-category feed view, synced to the display — same broadcast
+-- pattern as show_join_info / active_category_id, not a local-only toggle.
+-- No RLS change needed — already covered by the existing sessions policies.
+-- ==========================================================================
+
+alter table sessions add column if not exists feed_grouped boolean not null default false;
+
+-- ==========================================================================
+-- Interactive text markup (architecture only — foundation pass) — a third
+-- session type: students highlight word ranges in a fixed passage in
+-- response to tutor-set prompts. Word-index spans (not character offsets)
+-- so word-snapping is structural, not a correction step. One row per
+-- (session, prompt, device), upserted on resubmit — no anon DELETE policy
+-- needed. Reveal gating reuses the existing results_revealed flag, same
+-- concept already used for Quick-tap, not a new field.
+--
+-- Trust model note (same level already accepted elsewhere in this app):
+-- the anon UPDATE policy below is permissive (using (true)) — nothing
+-- stops a client from overwriting another device's row directly via the
+-- API, only client logic keeps each device writing its own. Same
+-- proportionate trust level as one_vote_per_device's soft lock and
+-- Quick-tap's open insert policy, not a new category of risk.
+-- ==========================================================================
+
+alter table sessions add column if not exists text_markup_enabled boolean not null default false;
+alter table sessions add column if not exists passage_text text;
+
+create table if not exists text_markup_prompts (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references sessions(id) on delete cascade,
+  prompt_text text not null,
+  sort_order int not null default 0,
+  created_at timestamptz not null default now()
+);
+
+alter table sessions add column if not exists active_prompt_id uuid references text_markup_prompts(id) on delete set null;
+
+create table if not exists text_markup_responses (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references sessions(id) on delete cascade,
+  prompt_id uuid not null references text_markup_prompts(id) on delete cascade,
+  device_id text not null,
+  spans jsonb not null default '[]'::jsonb,
+  updated_at timestamptz not null default now(),
+  unique (session_id, prompt_id, device_id)
+);
+
+-- Anon-writable (see trust model note above), so the RPC's input is
+-- otherwise unchecked at the DB layer. This constraint only guards shape —
+-- {start,end} both numeric, start >= 0, end >= start — not span bounds
+-- against the actual passage word count, which isn't visible from this
+-- table alone.
+--
+-- Postgres CHECK constraints can't contain a subquery directly (errors
+-- with 42601/0A000), so the array-element validation has to live in a
+-- function the constraint just calls.
+create or replace function text_markup_spans_valid(spans jsonb) returns boolean
+language sql immutable as $$
+  select jsonb_typeof(spans) = 'array'
+    and not exists (
+      select 1 from jsonb_array_elements(spans) as span
+      where jsonb_typeof(span->'start') <> 'number'
+        or jsonb_typeof(span->'end') <> 'number'
+        or (span->>'start')::numeric < 0
+        or (span->>'end')::numeric < (span->>'start')::numeric
+    );
+$$;
+
+alter table text_markup_responses drop constraint if exists text_markup_responses_spans_shape;
+alter table text_markup_responses add constraint text_markup_responses_spans_shape
+  check (text_markup_spans_valid(spans));
+
+create index if not exists idx_text_markup_prompts_session on text_markup_prompts(session_id);
+create index if not exists idx_text_markup_responses_session_prompt on text_markup_responses(session_id, prompt_id);
+
+alter table text_markup_prompts enable row level security;
+alter table text_markup_responses enable row level security;
+
+drop policy if exists "anon can read text markup prompts" on text_markup_prompts;
+create policy "anon can read text markup prompts" on text_markup_prompts
+  for select using (true);
+drop policy if exists "admin can manage text markup prompts" on text_markup_prompts;
+create policy "admin can manage text markup prompts" on text_markup_prompts
+  for all using (is_admin()) with check (is_admin());
+
+drop policy if exists "anon can insert text markup responses" on text_markup_responses;
+create policy "anon can insert text markup responses" on text_markup_responses
+  for insert with check (true);
+drop policy if exists "anon can update text markup responses" on text_markup_responses;
+create policy "anon can update text markup responses" on text_markup_responses
+  for update using (true) with check (true);
+drop policy if exists "anon can read revealed text markup responses" on text_markup_responses;
+create policy "anon can read revealed text markup responses" on text_markup_responses
+  for select using (
+    exists (select 1 from sessions s where s.id = text_markup_responses.session_id and s.results_revealed = true)
+  );
+drop policy if exists "admin can read text markup responses" on text_markup_responses;
+create policy "admin can read text markup responses" on text_markup_responses
+  for select using (is_admin());
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'text_markup_responses'
+  ) then
+    alter publication supabase_realtime add table text_markup_responses;
+  end if;
+end $$;
+
+-- ==========================================================================
+-- Own-row read for text markup responses, before reveal — a student
+-- revisiting a prompt they already answered needs their own prior
+-- highlights back even when results_revealed is false (the default and
+-- common state), which the results_revealed-gated SELECT policy above
+-- deliberately does not allow. Scoped RPC, not a widened SELECT policy:
+-- widening to `using (true)` would let any client bulk-read every
+-- student's highlights pre-reveal, defeating the herding protection the
+-- gate exists to provide. This function only ever returns the one row
+-- matching all three required parameters.
+-- ==========================================================================
+
+create or replace function get_own_text_markup_response(
+  p_session_id uuid,
+  p_prompt_id uuid,
+  p_device_id text
+)
+returns setof text_markup_responses
+language sql
+security definer
+set search_path = public
+as $$
+  select * from text_markup_responses
+  where session_id = p_session_id
+    and prompt_id = p_prompt_id
+    and device_id = p_device_id;
+$$;
+
+revoke all on function get_own_text_markup_response(uuid, uuid, text) from public;
+grant execute on function get_own_text_markup_response(uuid, uuid, text) to anon, authenticated;
+
+-- ==========================================================================
+-- Submit (upsert) a text markup response — a scoped RPC rather than a
+-- direct client-side upsert. PostgREST's on_conflict/merge-duplicates path
+-- requires the anon role to be able to SELECT the row it might conflict
+-- with (even when no conflict exists yet), and the only anon SELECT policy
+-- on this table is gated by results_revealed — so a direct upsert 401s
+-- (42501 insufficient_privilege) on every submit before reveal, which is
+-- the normal state during collection. Bypassing via security definer here
+-- (same technique as get_own_text_markup_response above) fixes the 401
+-- without widening the anon SELECT policy and reopening pre-reveal reads.
+-- ==========================================================================
+
+create or replace function submit_text_markup_response(
+  p_session_id uuid,
+  p_prompt_id uuid,
+  p_device_id text,
+  p_spans jsonb
+)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  insert into text_markup_responses (session_id, prompt_id, device_id, spans, updated_at)
+  values (p_session_id, p_prompt_id, p_device_id, p_spans, now())
+  on conflict (session_id, prompt_id, device_id)
+  do update set spans = excluded.spans, updated_at = excluded.updated_at;
+$$;
+
+revoke all on function submit_text_markup_response(uuid, uuid, text, jsonb) from public;
+grant execute on function submit_text_markup_response(uuid, uuid, text, jsonb) to anon, authenticated;
+
+-- ==========================================================================
+-- Reset session responses — text markup was missing this when Reset was
+-- first built for friction_pool/quick_tap_responses; same gap, same fix.
+-- ==========================================================================
+
+drop policy if exists "admin can delete text markup responses" on text_markup_responses;
+create policy "admin can delete text markup responses" on text_markup_responses
+  for delete using (is_admin());
+
+-- ==========================================================================
+-- Media Vote (Stage 1: transport + voting foundation) — a fourth session
+-- type. A video/audio clip plays on the standalone display, driven by
+-- transport controls in admin; students vote on a fixed button set as it
+-- plays, retapping freely. Button definitions reuse quick_tap_options
+-- directly (same shape, same existing anon-read/admin-manage policies) —
+-- a session is either quick_tap_enabled or media_vote_enabled, never both,
+-- so querying quick_tap_options by session_id stays unambiguous.
+--
+-- Two separate things, not to be conflated:
+-- - sessions.media_transport_* — current live state only, mutable, what
+--   display subscribes to (via the existing sessions Realtime
+--   subscription) to drive its own <video> element. Same pattern as
+--   active_category_id/show_join_info.
+-- - media_transport_events — permanent, insert-only log of every command
+--   ever issued. Nothing reads this back in Stage 1; it's forward-compat
+--   logging for Stage 2's later position-vs-time reconstruction.
+--
+-- Votes are recorded with only their real timestamp and which option was
+-- tapped — never a clip position computed on the student's device. Clip
+-- position at the moment of each vote gets reconstructed later (Stage 2)
+-- by joining a vote's created_at against media_transport_events.
+-- ==========================================================================
+
+alter table sessions add column if not exists media_vote_enabled boolean not null default false;
+
+alter table sessions add column if not exists media_transport_action text
+  check (media_transport_action is null or media_transport_action in ('play','pause','seek'));
+alter table sessions add column if not exists media_transport_position_ms integer;
+alter table sessions add column if not exists media_transport_issued_at timestamptz;
+alter table sessions add column if not exists media_transport_seq integer not null default 0;
+
+create table if not exists media_transport_events (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references sessions(id) on delete cascade,
+  action text not null check (action in ('play','pause','seek')),
+  position_ms integer not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_media_transport_events_session on media_transport_events(session_id);
+
+alter table media_transport_events enable row level security;
+
+drop policy if exists "admin can manage media transport events" on media_transport_events;
+create policy "admin can manage media transport events" on media_transport_events
+  for all using (is_admin()) with check (is_admin());
+
+create table if not exists media_vote_responses (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references sessions(id) on delete cascade,
+  option_id uuid not null references quick_tap_options(id) on delete cascade,
+  device_id text not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_media_vote_responses_session on media_vote_responses(session_id);
+
+alter table media_vote_responses enable row level security;
+
+drop policy if exists "anon can insert media vote responses" on media_vote_responses;
+create policy "anon can insert media vote responses" on media_vote_responses
+  for insert with check (true);
+drop policy if exists "admin can read media vote responses" on media_vote_responses;
+create policy "admin can read media vote responses" on media_vote_responses
+  for select using (is_admin());
+drop policy if exists "admin can delete media vote responses" on media_vote_responses;
+create policy "admin can delete media vote responses" on media_vote_responses
+  for delete using (is_admin());
+
+-- Not in the original build prompt's schema block — added because admin's
+-- live vote count subscribes to INSERT events on this table (same as
+-- friction_pool/quick_tap_responses/text_markup_responses all needed this
+-- same idempotent step above), and without it the subscription silently
+-- never fires.
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'media_vote_responses'
+  ) then
+    alter publication supabase_realtime add table media_vote_responses;
+  end if;
+end $$;
+
+-- ==========================================================================
+-- Media Vote, Stage 1.5: mmutube (Kaltura) as a second source, alongside
+-- the local file picker from Stage 1. Both sources drive the exact same
+-- media_transport_*/media_transport_events broadcast — only how the
+-- player is commanded on display differs by source. null media_source_type
+-- means 'local' (Stage 1's existing behaviour) — not forcing every
+-- existing/future media-vote session to explicitly set this.
+-- ==========================================================================
+
+alter table sessions add column if not exists media_source_type text
+  check (media_source_type is null or media_source_type in ('local', 'mmutube'));
+alter table sessions add column if not exists media_entry_id text;
+
+-- ==========================================================================
+-- Media Vote, Stage 2 (aggregated timeline) — reveals how the room's vote
+-- evolved across the clip, reconstructed from Stage 1's permanent
+-- media_transport_events log joined against media_vote_responses.created_at
+-- (never anything stored on the vote itself). Bucket size is broadcast,
+-- not a local per-screen toggle — same pattern as active_category_id/
+-- results_revealed. No new RLS — covered by the existing sessions
+-- policies; sessions is already in the Realtime publication.
+-- ==========================================================================
+
+alter table sessions add column if not exists media_timeline_bucket_seconds integer not null default 5;
+
+-- Not in the original build prompt — needed for the display (running
+-- anon, not authenticated as admin) to reconstruct the timeline at all.
+-- media_transport_events and media_vote_responses both only had
+-- admin-only SELECT policies before now (Stage 1's "admin-only vote
+-- count" was true only for the raw count in admin; Stage 2's display
+-- timeline needs to read both tables directly). Same
+-- reveal-gated-anon-read pattern already used for quick_tap_responses/
+-- text_markup_responses — no read access until results_revealed is true,
+-- same herding-prevention rationale, additive alongside the existing
+-- admin policies (is_admin() access is unaffected).
+drop policy if exists "anon can read revealed media vote responses" on media_vote_responses;
+create policy "anon can read revealed media vote responses" on media_vote_responses
+  for select using (
+    exists (
+      select 1 from sessions s
+      where s.id = media_vote_responses.session_id
+      and s.results_revealed = true
+    )
+  );
+
+drop policy if exists "anon can read revealed media transport events" on media_transport_events;
+create policy "anon can read revealed media transport events" on media_transport_events
+  for select using (
+    exists (
+      select 1 from sessions s
+      where s.id = media_transport_events.session_id
+      and s.results_revealed = true
+    )
+  );
+
+-- ==========================================================================
+-- Media Vote — display-readiness signal (first reverse-direction broadcast
+-- in the app: display telling admin something, not the other way round).
+-- A scoped RPC rather than a blanket anon UPDATE policy on sessions —
+-- Postgres RLS can't restrict which columns an UPDATE touches via
+-- `with check` alone, so a security-definer function that only ever
+-- touches media_player_ready is the narrower, safer surface. Same
+-- pattern already used for get_own_text_markup_response().
+-- ==========================================================================
+
+alter table sessions add column if not exists media_player_ready boolean not null default false;
+
+create or replace function set_media_player_ready(p_session_id uuid, p_ready boolean)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update sessions set media_player_ready = p_ready where id = p_session_id;
+$$;
+
+revoke all on function set_media_player_ready(uuid, boolean) from public;
+grant execute on function set_media_player_ready(uuid, boolean) to anon, authenticated;
+
+-- ==========================================================================
+-- Sync chart-type cycling to the display — same fix already applied to
+-- group-by-category: both were independent local state + a spacebar
+-- listener on each screen, now broadcast from admin instead. Doesn't
+-- apply to Pulse Check-styled sessions (quick_tap_style = 'traffic_light'/
+-- 'confidence'), which already have no cycle at all by design. No RLS
+-- changes — covered by the existing sessions policies; sessions is
+-- already in the Realtime publication.
+-- ==========================================================================
+
+alter table sessions add column if not exists quick_tap_chart_type text
+  check (quick_tap_chart_type is null or quick_tap_chart_type in ('buttons', 'bar', 'pie', 'sparkline'));
+alter table sessions add column if not exists text_markup_chart_type text
+  check (text_markup_chart_type is null or text_markup_chart_type in ('heatmap', 'community'));
+
+-- ==========================================================================
+-- Text Markup — language and poetry support. A BCP-47 language tag driving
+-- Intl.Segmenter-based tokenization (correct word boundaries for languages
+-- with no whitespace between words) and text direction (RTL for Arabic/
+-- Hebrew/etc.), instead of the old naive whitespace split. Defaults to
+-- 'en' — Intl.Segmenter produces materially the same word boundaries as
+-- the old split for English, so existing sessions are unaffected. No RLS
+-- change needed — covered by the existing sessions policies.
+-- ==========================================================================
+
+alter table sessions add column if not exists passage_locale text not null default 'en';
+
+-- ==========================================================================
+-- Text Markup — cross-prompt comparison. null (default) means normal
+-- single-prompt viewing, unchanged. A non-null value means "show
+-- active_prompt_id's heatmap alongside this second prompt's heatmap."
+-- Broadcast, tutor-controlled — same reasoning as the timeline
+-- bucket-size slider, not a personal per-screen toggle. No RLS change —
+-- covered by the existing sessions policies.
+-- ==========================================================================
+
+alter table sessions add column if not exists text_markup_compare_prompt_id uuid references text_markup_prompts(id) on delete set null;
+
+-- ==========================================================================
+-- Text Markup — heatmap mode and palette. Both are broadcast, tutor-
+-- controlled toggles on the heatmap view, same reasoning as chart-type
+-- cycling and the compare picker above: the room's projector screen should
+-- follow the tutor's console, not a per-viewer local preference.
+-- 'divergence' mode highlights words picked by only 1-2 respondents
+-- instead of consensus hotspots; 'colorblind' swaps the blue-to-red ramp
+-- for a Viridis-style purple-to-yellow one. null defaults to the existing
+-- behaviour ('consensus' / 'classic') so existing sessions are unaffected.
+-- No RLS change — covered by the existing sessions policies.
+-- ==========================================================================
+
+alter table sessions add column if not exists text_markup_heatmap_mode text
+  check (text_markup_heatmap_mode is null or text_markup_heatmap_mode in ('consensus', 'divergence'));
+alter table sessions add column if not exists text_markup_palette text
+  check (text_markup_palette is null or text_markup_palette in ('classic', 'colorblind'));
+
+-- ==========================================================================
+-- Running Order — sixth session type. Own tables, not a mode on an
+-- existing type, per the established pattern (Media Vote, Text Markup).
+-- ==========================================================================
+
+alter table sessions add column if not exists running_order_enabled boolean not null default false;
+
+create table if not exists ranking_items (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references sessions(id) on delete cascade,
+  label text not null,
+  synopsis text,
+  sort_order int not null default 0,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_ranking_items_session on ranking_items(session_id);
+
+alter table ranking_items enable row level security;
+
+drop policy if exists "anon can read ranking items" on ranking_items;
+create policy "anon can read ranking items" on ranking_items
+  for select using (true);
+drop policy if exists "admin can manage ranking items" on ranking_items;
+create policy "admin can manage ranking items" on ranking_items
+  for all using (is_admin()) with check (is_admin());
+
+-- Teams are the group's soft identity. No unique constraint on team_name —
+-- claim_ranking_team() below is the only enforcement of "one live claim per
+-- name," and it deliberately allows a *new* row under the same name once
+-- the old one has gone idle for 5 minutes. No anon insert/update policy
+-- exists at all: every write to this table goes through
+-- claim_ranking_team() or record_ranking_move()'s last_activity_at bump,
+-- both security definer. A direct anon insert policy would let any device
+-- create a team row under any name with no collision check.
+-- superseded is set the moment a *new* row claims the same name (see
+-- claim_ranking_team below). It exists to close a race the idle-reclaim
+-- design would otherwise have: "idle for 5 minutes" means no activity, not
+-- necessarily a dead device — a backgrounded tab can resume and try to
+-- write again after someone else has already reclaimed its name. Without
+-- this flag, both the original (resumed) device and the new claimant could
+-- submit under the same display name, and both would count in aggregates.
+create table if not exists ranking_teams (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references sessions(id) on delete cascade,
+  team_name text not null,
+  editor_device_id text not null,
+  last_activity_at timestamptz not null default now(),
+  superseded boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_ranking_teams_session on ranking_teams(session_id);
+create index if not exists idx_ranking_teams_session_activity on ranking_teams(session_id, last_activity_at);
+
+alter table ranking_teams enable row level security;
+
+drop policy if exists "admin can read ranking teams" on ranking_teams;
+create policy "admin can read ranking teams" on ranking_teams
+  for select using (is_admin());
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'ranking_teams'
+  ) then
+    alter publication supabase_realtime add table ranking_teams;
+  end if;
+end $$;
+
+-- Append-only move log. Records a swap, not a position: each row is "this
+-- item got its up/down button pressed and crossed this adjacent item,"
+-- which is exactly what both oscillation metrics need and nothing more —
+-- there is no from_pos/to_pos, deliberately, since nothing in this pass
+-- needs to reconstruct intermediate ordering server-side. No anon select
+-- policy at all: the raw log is never read directly by any client.
+-- get_ranking_item_move_counts()/get_ranking_pair_reversals() below are the
+-- only readers, and both run as security definer.
+create table if not exists ranking_moves (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references sessions(id) on delete cascade,
+  team_id uuid not null references ranking_teams(id) on delete cascade,
+  moved_item_id uuid not null references ranking_items(id) on delete cascade,
+  swapped_with_item_id uuid not null references ranking_items(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_ranking_moves_session on ranking_moves(session_id);
+create index if not exists idx_ranking_moves_team on ranking_moves(team_id);
+
+alter table ranking_moves enable row level security;
+
+-- Admin-only, for support/debugging — not read by any pass-1 UI.
+drop policy if exists "admin can read ranking moves" on ranking_moves;
+create policy "admin can read ranking moves" on ranking_moves
+  for select using (is_admin());
+
+-- One row per team, upserted by submit_ranking_order(). final_order is a
+-- jsonb array of ranking_items.id, ordered. Reveal-gated raw read is used
+-- here rather than forcing a client-side join through an RPC — a
+-- submitted final_order is exactly what's about to be projected to the
+-- room anyway once revealed, so this is proportionate (same reasoning as
+-- media_vote_responses' Stage 2 reveal-gated read).
+create table if not exists ranking_submissions (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references sessions(id) on delete cascade,
+  team_id uuid not null references ranking_teams(id) on delete cascade unique,
+  final_order jsonb not null,
+  submitted_at timestamptz not null default now()
+);
+
+create index if not exists idx_ranking_submissions_session on ranking_submissions(session_id);
+
+alter table ranking_submissions enable row level security;
+
+drop policy if exists "admin can read ranking submissions" on ranking_submissions;
+create policy "admin can read ranking submissions" on ranking_submissions
+  for select using (is_admin());
+drop policy if exists "anon can read revealed ranking submissions" on ranking_submissions;
+create policy "anon can read revealed ranking submissions" on ranking_submissions
+  for select using (
+    exists (
+      select 1 from sessions s
+      where s.id = ranking_submissions.session_id
+      and s.results_revealed = true
+    )
+  );
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'ranking_submissions'
+  ) then
+    alter publication supabase_realtime add table ranking_submissions;
+  end if;
+end $$;
+
+-- Broadcast display state — same pattern as active_category_id/
+-- active_prompt_id: tutor-controlled, driving what every screen shows,
+-- never a local per-screen toggle.
+alter table sessions add column if not exists active_ranking_team_id uuid references ranking_teams(id) on delete set null;
+alter table sessions add column if not exists ranking_view_mode text
+  check (ranking_view_mode is null or ranking_view_mode in ('team', 'aggregate'));
+
+-- ==========================================================================
+-- Running Order — RPCs. All security definer, all following the existing
+-- revoke all from public / grant execute to anon, authenticated pattern.
+-- claim_ranking_team, record_ranking_move, and submit_ranking_order are
+-- language plpgsql, not language sql — a first for this codebase (every
+-- other RPC above is plain SQL) — because each needs conditional branching
+-- (collision check, ownership check, reveal check) that a single SQL
+-- statement can't express.
+-- ==========================================================================
+
+-- Claim a team name. Serialises concurrent claims for the same
+-- (session, normalised name) via an advisory lock, so two devices racing
+-- to claim the same name in the same instant can't both succeed. Rejects
+-- if a *live* claim exists (activity within the last 5 minutes); otherwise
+-- inserts a fresh row, even if a now-idle row with the same name exists —
+-- and marks any such prior row(s) `superseded = true` in the same
+-- transaction, still under the advisory lock. This is what lets
+-- record_ranking_move/submit_ranking_order below reject a write from a
+-- device that resumes *after* its name has been reclaimed, instead of
+-- silently succeeding against a row nothing else still treats as current.
+-- Also rejects once results_revealed — same as record_ranking_move/
+-- submit_ranking_order — so a late joiner can't claim a team that will
+-- never be able to submit anything.
+create or replace function claim_ranking_team(
+  p_session_id uuid,
+  p_team_name text,
+  p_device_id text
+)
+returns ranking_teams
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_normalised text := lower(trim(p_team_name));
+  v_revealed boolean;
+  v_existing ranking_teams;
+  v_new ranking_teams;
+begin
+  if v_normalised = '' then
+    raise exception 'EMPTY_TEAM_NAME' using errcode = 'P0001';
+  end if;
+
+  select results_revealed into v_revealed from sessions where id = p_session_id;
+
+  if coalesce(v_revealed, false) then
+    raise exception 'SESSION_REVEALED' using errcode = 'P0001';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtext(p_session_id::text || ':' || v_normalised));
+
+  select * into v_existing
+  from ranking_teams
+  where session_id = p_session_id
+    and lower(trim(team_name)) = v_normalised
+    and superseded = false
+    and last_activity_at > now() - interval '5 minutes'
+  limit 1;
+
+  if found then
+    raise exception 'TEAM_NAME_TAKEN' using errcode = 'P0001';
+  end if;
+
+  update ranking_teams
+  set superseded = true
+  where session_id = p_session_id
+    and lower(trim(team_name)) = v_normalised
+    and superseded = false;
+
+  insert into ranking_teams (session_id, team_name, editor_device_id, last_activity_at)
+  values (p_session_id, trim(p_team_name), p_device_id, now())
+  returning * into v_new;
+
+  return v_new;
+end;
+$$;
+
+revoke all on function claim_ranking_team(uuid, text, text) from public;
+grant execute on function claim_ranking_team(uuid, text, text) to anon, authenticated;
+
+-- Resume an existing claim after a refresh. Matches on device_id only —
+-- deliberately not staleness-checked, since staleness only matters for a
+-- *different* device's collision check, not for the original editor
+-- resuming their own row. Returns the most recent row if this device
+-- somehow owns more than one (edge case, harmless to handle defensively).
+create or replace function get_own_ranking_team(
+  p_session_id uuid,
+  p_device_id text
+)
+returns setof ranking_teams
+language sql
+security definer
+set search_path = public
+as $$
+  select * from ranking_teams
+  where session_id = p_session_id
+    and editor_device_id = p_device_id
+  order by created_at desc
+  limit 1;
+$$;
+
+revoke all on function get_own_ranking_team(uuid, text) from public;
+grant execute on function get_own_ranking_team(uuid, text) to anon, authenticated;
+
+-- Record one swap. Checks the calling device actually owns the team AND
+-- that the team hasn't been superseded (prevents a backgrounded-then-
+-- resumed device from writing against a name someone else has since
+-- reclaimed), checks results_revealed (enforces the reveal-freeze at the
+-- point of writing, not just in the UI), and checks both item ids
+-- actually belong to this session's ranking_items (a defensive check,
+-- kept consistent with how carefully this function already checks
+-- ownership and reveal state — no reason to be strict about one and not
+-- the other). Bumps last_activity_at in the same transaction — this is
+-- also what admin's live activity count and the 5-minute idle-reclaim
+-- window both key off.
+create or replace function record_ranking_move(
+  p_session_id uuid,
+  p_team_id uuid,
+  p_device_id text,
+  p_moved_item_id uuid,
+  p_swapped_with_item_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_owns boolean;
+  v_superseded boolean;
+  v_revealed boolean;
+begin
+  select (editor_device_id = p_device_id), superseded
+    into v_owns, v_superseded
+  from ranking_teams
+  where id = p_team_id and session_id = p_session_id;
+
+  if not coalesce(v_owns, false) then
+    raise exception 'NOT_TEAM_EDITOR' using errcode = 'P0001';
+  end if;
+
+  if coalesce(v_superseded, false) then
+    raise exception 'TEAM_SUPERSEDED' using errcode = 'P0001';
+  end if;
+
+  select results_revealed into v_revealed from sessions where id = p_session_id;
+
+  if coalesce(v_revealed, false) then
+    raise exception 'SESSION_REVEALED' using errcode = 'P0001';
+  end if;
+
+  if p_moved_item_id = p_swapped_with_item_id then
+    raise exception 'INVALID_MOVE' using errcode = 'P0001';
+  end if;
+
+  if not exists (
+    select 1 from ranking_items where id = p_moved_item_id and session_id = p_session_id
+  ) or not exists (
+    select 1 from ranking_items where id = p_swapped_with_item_id and session_id = p_session_id
+  ) then
+    raise exception 'ITEM_NOT_IN_SESSION' using errcode = 'P0001';
+  end if;
+
+  insert into ranking_moves (session_id, team_id, moved_item_id, swapped_with_item_id)
+  values (p_session_id, p_team_id, p_moved_item_id, p_swapped_with_item_id);
+
+  update ranking_teams set last_activity_at = now() where id = p_team_id;
+end;
+$$;
+
+revoke all on function record_ranking_move(uuid, uuid, text, uuid, uuid) from public;
+grant execute on function record_ranking_move(uuid, uuid, text, uuid, uuid) to anon, authenticated;
+
+-- Submit (upsert) a team's final order. Same ownership/superseded/reveal
+-- checks as record_ranking_move — submitting after reveal, or after the
+-- team's name has been reclaimed by someone else, is rejected. Also
+-- enforces server-side what was previously only a client-side assumption:
+-- final_order must contain every one of this session's ranking_items
+-- exactly once — no partial orders, no stray ids from another session.
+-- Idempotent on team_id, so a double-click/retry doesn't error.
+create or replace function submit_ranking_order(
+  p_session_id uuid,
+  p_team_id uuid,
+  p_device_id text,
+  p_final_order jsonb
+)
+returns ranking_submissions
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_owns boolean;
+  v_superseded boolean;
+  v_revealed boolean;
+  v_expected_count int;
+  v_provided_count int;
+  v_matching_count int;
+  v_result ranking_submissions;
+begin
+  select (editor_device_id = p_device_id), superseded
+    into v_owns, v_superseded
+  from ranking_teams
+  where id = p_team_id and session_id = p_session_id;
+
+  if not coalesce(v_owns, false) then
+    raise exception 'NOT_TEAM_EDITOR' using errcode = 'P0001';
+  end if;
+
+  if coalesce(v_superseded, false) then
+    raise exception 'TEAM_SUPERSEDED' using errcode = 'P0001';
+  end if;
+
+  select results_revealed into v_revealed from sessions where id = p_session_id;
+
+  if coalesce(v_revealed, false) then
+    raise exception 'SESSION_REVEALED' using errcode = 'P0001';
+  end if;
+
+  select count(*) into v_expected_count from ranking_items where session_id = p_session_id;
+  select jsonb_array_length(p_final_order) into v_provided_count;
+
+  if v_provided_count is distinct from v_expected_count then
+    raise exception 'INCOMPLETE_ORDER' using errcode = 'P0001';
+  end if;
+
+  select count(*) into v_matching_count
+  from ranking_items ri
+  where ri.session_id = p_session_id
+    and ri.id::text in (select jsonb_array_elements_text(p_final_order));
+
+  if v_matching_count is distinct from v_expected_count then
+    raise exception 'INVALID_ITEM_IN_ORDER' using errcode = 'P0001';
+  end if;
+
+  insert into ranking_submissions (session_id, team_id, final_order, submitted_at)
+  values (p_session_id, p_team_id, p_final_order, now())
+  on conflict (team_id) do update
+    set final_order = excluded.final_order, submitted_at = excluded.submitted_at
+  returning * into v_result;
+
+  update ranking_teams set last_activity_at = now() where id = p_team_id;
+
+  return v_result;
+end;
+$$;
+
+revoke all on function submit_ranking_order(uuid, uuid, text, jsonb) from public;
+grant execute on function submit_ranking_order(uuid, uuid, text, jsonb) to anon, authenticated;
+
+-- Aggregate: raw move count per item, submitted teams only. Reveal-gated
+-- inside the function (not via a table RLS policy, since this is
+-- computed, not a row set) — returns empty before reveal.
+create or replace function get_ranking_item_move_counts(p_session_id uuid)
+returns table(item_id uuid, move_count bigint)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select m.moved_item_id as item_id, count(*) as move_count
+  from ranking_moves m
+  join ranking_submissions sub on sub.team_id = m.team_id
+  where m.session_id = p_session_id
+    and exists (
+      select 1 from sessions s
+      where s.id = p_session_id and s.results_revealed = true
+    )
+  group by m.moved_item_id;
+$$;
+
+revoke all on function get_ranking_item_move_counts(uuid) from public;
+grant execute on function get_ranking_item_move_counts(uuid) to anon, authenticated;
+
+-- Aggregate: pairwise reversal count, submitted teams only. Returns every
+-- pair that ever crossed, with its raw count — including pairs that only
+-- crossed once. The "count of 1 vs count of 2+" judgement about what
+-- counts as genuine oscillation is a display-layer highlighting decision
+-- (bold/emphasise pairs with count >= 2), not a filter applied here —
+-- don't add a having count(*) >= 2 clause, the full distribution is the
+-- point.
+create or replace function get_ranking_pair_reversals(p_session_id uuid)
+returns table(item_a_id uuid, item_b_id uuid, reversal_count bigint)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    least(m.moved_item_id, m.swapped_with_item_id) as item_a_id,
+    greatest(m.moved_item_id, m.swapped_with_item_id) as item_b_id,
+    count(*) as reversal_count
+  from ranking_moves m
+  join ranking_submissions sub on sub.team_id = m.team_id
+  where m.session_id = p_session_id
+    and exists (
+      select 1 from sessions s
+      where s.id = p_session_id and s.results_revealed = true
+    )
+  group by least(m.moved_item_id, m.swapped_with_item_id), greatest(m.moved_item_id, m.swapped_with_item_id)
+  order by reversal_count desc;
+$$;
+
+revoke all on function get_ranking_pair_reversals(uuid) from public;
+grant execute on function get_ranking_pair_reversals(uuid) to anon, authenticated;
+
+-- Explicit API privileges; RLS above controls which rows/actions are allowed.
+grant usage on schema public to anon, authenticated;
+grant select, insert, update, delete on public.sessions, public.session_categories, public.friction_pool, public.quick_tap_options, public.quick_tap_responses, public.text_markup_prompts, public.text_markup_responses, public.media_transport_events, public.media_vote_responses, public.ranking_items, public.ranking_teams, public.ranking_moves, public.ranking_submissions to anon, authenticated;

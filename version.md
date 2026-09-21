@@ -8,11 +8,22 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.20**
+**Current version: 2.3.21**
 
 ---
 
 ## Log
+
+### 2.3.21 — 2026-09-21 (**schema**)
+Hardened independent deployments. New migration `009_private_credentials_and_archive_guards.sql`
+separates editing credentials from public vote IDs, stores only session/mode-bound credential hashes,
+invalidates legacy editing credentials while preserving results, and restricts markup writes to RPCs.
+Archived sessions are also gated inside privileged reads and submission functions. One-vote enforcement
+uses a private unique claim table, rejects missing identifiers in limited sessions, and clears claims
+on reset. Migration 007 now drops dependent foreign keys before rebuilding their parent constraints.
+Admin markup exports/counts use an explicit safe column list. Added a transactional `first_install.sql`
+snapshot, its generator, and current installation/upgrade instructions. Tests remain local and uncommitted.
+Apply upgrades between classes; refresh all tabs and reset any old sessions before collecting again.
 
 ### 2.3.20 — 2026-09-21
 Added `LICENSE` (MIT, Andy Dickinson) — the repository had no licence at all, flagged in security
