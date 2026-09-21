@@ -87,3 +87,7 @@ Each page remains self-contained, with no new runtime assets or build step.
 Apply the [database migration](migrations/README.md) before publishing these pages. The database baseline and ordered migrations are now tracked in `migrations/`; the original local schema file remains ignored.
 
 See [local verification](tests/README.md) for the optional development tests. Tests add no browser dependencies.
+
+## Licence
+
+[MIT](LICENSE).

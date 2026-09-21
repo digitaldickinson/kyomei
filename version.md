@@ -8,11 +8,15 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.19**
+**Current version: 2.3.20**
 
 ---
 
 ## Log
+
+### 2.3.20 — 2026-09-21
+Added `LICENSE` (MIT, Andy Dickinson) — the repository had no licence at all, flagged in security
+review. Linked from a new short "Licence" section in `README.md`.
 
 ### migrations/README.md — 2026-09-21 (docs only, no version bump)
 Expanded the "New installation" walkthrough: creating the Supabase project, running the schema,
