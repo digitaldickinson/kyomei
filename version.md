@@ -14,6 +14,14 @@ Update this file with each change that ships — bump the version, add an entry 
 
 ## Log
 
+### migrations/README.md — 2026-09-21 (docs only, no version bump)
+Expanded the "New installation" walkthrough: creating the Supabase project, running the schema,
+Auth URL configuration (Site URL/Redirect URLs — magic links silently fail without these), the
+built-in mailer's production-unsuitable rate limit and when to bother with custom SMTP, filling in
+the app + Kaltura config, deploying, and an end-to-end verification checklist. Previously three
+bullets covering only schema + keys; didn't mention Auth setup, email delivery, or verification at
+all.
+
 ### 2.3.19 — 2026-09-21
 Security review fixes (install-guide/dependency section): `@supabase/supabase-js` was pinned only
 to major version 2 on all three pages, meaning jsDelivr silently serves whatever the latest 2.x
