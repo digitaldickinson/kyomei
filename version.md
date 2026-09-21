@@ -8,11 +8,24 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.21**
+**Current version: 2.3.22**
 
 ---
 
 ## Log
+
+### 2.3.22 — 2026-09-21 (**schema**)
+Bug fix: migration 007 added a composite foreign key (`session_id` + category/option/prompt id)
+*alongside* the original single-column one instead of replacing it, for `friction_pool`,
+`quick_tap_responses`, `media_vote_responses`, and `text_markup_responses`. Two FK constraints
+between the same pair of tables breaks PostgREST's embedded-select relationship detection —
+confirmed live, this broke `kyomei-admin.html`'s and `kyomei-display.html`'s Text response feed
+(`.select('*, session_categories(label)')`) with "Could not embed because more than one
+relationship was found for 'friction_pool' and 'session_categories'" the moment 007 was applied.
+New migration `migrations/010_fix_ambiguous_category_relationship.sql` drops the redundant
+original FK for all four tables, recreated on the composite FK with the original's `ON DELETE`
+behavior (007's composite FKs had silently dropped to `NO ACTION` from
+`RESTRICT`/`CASCADE`). `migrations/first_install.sql` regenerated to include it.
 
 ### 2.3.21 — 2026-09-21 (**schema**)
 Hardened independent deployments. New migration `009_private_credentials_and_archive_guards.sql`
