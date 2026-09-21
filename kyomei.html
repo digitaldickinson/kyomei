@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>kyomei</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0"></script>
 <style>
   :root {
     --bg: #14151a;
@@ -611,6 +611,7 @@ function submissionErrorMessage(error) {
   if (error.message === 'OFFLINE') return 'Not sent — reconnect and try again.';
   if (error.message === 'SUBMISSIONS_CLOSED') return 'Not sent — submissions are closed.';
   if (error.message === 'SESSION_RESET') return 'The tutor reset this session. Refresh before submitting again.';
+  if (error.message === 'ALREADY_VOTED') return 'Already recorded from this device.';
   return 'Receipt not confirmed — check your connection before retrying.';
 }
 async function sendStudentRequest(operation) {

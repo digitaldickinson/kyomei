@@ -8,11 +8,84 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.12**
+**Current version: 2.3.19**
 
 ---
 
 ## Log
+
+### 2.3.19 — 2026-09-21
+Security review fixes (install-guide/dependency section): `@supabase/supabase-js` was pinned only
+to major version 2 on all three pages, meaning jsDelivr silently serves whatever the latest 2.x
+release is at any moment — pinned to the exact current release (2.116.0) instead. `KALTURA_PARTNER_ID`/
+`KALTURA_UICONF_ID` in `kyomei-display.html` (the Media Vote `mmutube` source) had the same
+institution-specific-credential problem as the Supabase config did — now placeholders on `main`
+with a scoped guard (only the `mmutube` path is affected; local video files and every other session
+type are unaffected) showing a clear message instead of silently trying to load through the
+original institution's Kaltura account. `README.md` documents both. `live` branch needs the real
+Kaltura IDs restored alongside its existing real Supabase credentials.
+
+### 2.3.18 — 2026-09-21
+Security review fix: quick-tap counts, media-vote timelines, the text-response feed, and the
+text-markup aggregate all fetched their full response set in one unpaginated `.select()` — past
+Supabase's default per-request row limit, further votes/responses would have silently gone
+missing from the tally with no indication anything was wrong. Added a shared `fetchAllRows()`
+helper (`kyomei-admin.html`, `kyomei-display.html`) that pages through in batches of 500 until a
+short page confirms nothing's left, applied to all four read paths in both admin's own live view
+and the projected display. Also stopped treating a load *failure* the same as *zero responses* —
+each of these now leaves the last successfully-loaded state on screen and logs to console on
+error, instead of blanking to an empty/zero result. No schema change — pure client-side fix.
+
+### 2.3.17 — 2026-09-21 — **schema**
+Security review fix: `one_vote_per_device` now has a real database backstop (`quick_tap_responses`
+trigger, `check_one_vote_per_device`) rejecting a second insert for the same `(session_id,
+device_id)` pair — previously enforced only by a client-side `localStorage` check, trivially
+bypassed by clearing storage. Explicit decision, not a silent gap: `device_id` stays unauthenticated
+so this raises the bar from trivial to deliberate, not to unbeatable. `kyomei.html`'s
+`submissionErrorMessage()` maps the new `ALREADY_VOTED` error to "Already recorded from this
+device." New migration `migrations/008_one_vote_per_device_backstop.sql`.
+
+### 2.3.16 — 2026-09-21 — **schema**
+Security review fix: `friction_pool.category_id`, `quick_tap_responses.option_id`,
+`text_markup_responses.prompt_id`, and `media_vote_responses.option_id` are now composite foreign
+keys (adding `session_id`) instead of plain id-only FKs — closes a gap where a response could
+carry one session's `session_id` but another session's category/option/prompt id, both
+individually valid. Confirmed ranking's RPC-only write path (`record_ranking_move`,
+`submit_ranking_order`) already checks this itself; no change needed there. New migration
+`migrations/007_cross_session_fk_guard.sql` — **will fail to apply if any existing row already has
+a mismatched id**, naming the offending row.
+
+### 2.3.15 — 2026-09-21 — **schema**
+Security review fix: every anon-facing read policy (11 across `sessions`, `session_categories`,
+`friction_pool`, `quick_tap_options`/`quick_tap_responses`, `text_markup_prompts`/
+`text_markup_responses`, `media_vote_responses`/`media_transport_events`, `ranking_items`/
+`ranking_submissions`) now also requires the parent session to not be archived. Full "session code
+is a real access boundary" enforcement isn't achievable without moving reads behind RPCs, which
+breaks Realtime delivery to anon clients unless the whole live-sync architecture is redesigned
+alongside it — out of scope here. This bounds exposure instead: any anonymous client could
+previously enumerate every session (and read its categories/responses/results) ever created, with
+no code required at all; now that stops the moment a session is archived. New migration
+`migrations/006_archive_anon_read_gate.sql`; `friction_pool_schema.sql` updated to match across all
+11 policies.
+
+### 2.3.14 — 2026-09-21 — **schema**
+Security review fix: `text_markup_responses` no longer grants `anon` `SELECT` on `device_id` —
+Postgres column-level privileges layered on top of the existing row-level policy, restricting
+`anon` to exactly the columns the app uses (confirmed: `kyomei-display.html` only ever selects
+`spans`). Closes the other half of the update-lockdown fix from 2.3.12 — even with that raw-REST
+bypass closed, a `device_id` leaked via a revealed session's read could still be used to impersonate
+that device through the legitimate RPC, since it trusts whatever `device_id` it's given.
+`authenticated` (admin) access is unaffected. New migration
+`migrations/005_text_markup_device_id_lockdown.sql`.
+
+### 2.3.13 — 2026-09-21
+Security review fix: all three pages had the real Supabase project URL and anon key hardcoded, so
+anyone cloning this repo and deploying it unchanged would silently connect to the live production
+database. `SUPABASE_URL`/`SUPABASE_ANON_KEY` are now literal placeholders on `main`; each page
+checks for them before calling `createClient()` and shows a "Configuration required" message
+instead of starting up misconfigured if they're still unset. Real credentials moved to a new `live`
+branch — GitHub Pages needs repointing there manually (a repo settings change, not something this
+session could do). README.md documents the split.
 
 ### 2.3.12 — 2026-09-21 — **schema**
 Security review fix: removed `text_markup_responses`' anon UPDATE policy (`using (true) with check
