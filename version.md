@@ -8,11 +8,20 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.12**
+**Current version: 2.3.13**
 
 ---
 
 ## Log
+
+### 2.3.13 — 2026-09-21
+Security review fix: all three pages had the real Supabase project URL and anon key hardcoded, so
+anyone cloning this repo and deploying it unchanged would silently connect to the live production
+database. `SUPABASE_URL`/`SUPABASE_ANON_KEY` are now literal placeholders on `main`; each page
+checks for them before calling `createClient()` and shows a "Configuration required" message
+instead of starting up misconfigured if they're still unset. Real credentials moved to a new `live`
+branch — GitHub Pages needs repointing there manually (a repo settings change, not something this
+session could do). README.md documents the split.
 
 ### 2.3.12 — 2026-09-21 — **schema**
 Security review fix: removed `text_markup_responses`' anon UPDATE policy (`using (true) with check
