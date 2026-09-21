@@ -8,11 +8,22 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.17**
+**Current version: 2.3.18**
 
 ---
 
 ## Log
+
+### 2.3.18 — 2026-09-21
+Security review fix: quick-tap counts, media-vote timelines, the text-response feed, and the
+text-markup aggregate all fetched their full response set in one unpaginated `.select()` — past
+Supabase's default per-request row limit, further votes/responses would have silently gone
+missing from the tally with no indication anything was wrong. Added a shared `fetchAllRows()`
+helper (`kyomei-admin.html`, `kyomei-display.html`) that pages through in batches of 500 until a
+short page confirms nothing's left, applied to all four read paths in both admin's own live view
+and the projected display. Also stopped treating a load *failure* the same as *zero responses* —
+each of these now leaves the last successfully-loaded state on screen and logs to console on
+error, instead of blanking to an empty/zero result. No schema change — pure client-side fix.
 
 ### 2.3.17 — 2026-09-21 — **schema**
 Security review fix: `one_vote_per_device` now has a real database backstop (`quick_tap_responses`

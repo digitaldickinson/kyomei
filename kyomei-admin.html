@@ -1145,6 +1145,19 @@ async function fetchAllSessionRows(table, sessionId) {
     if (data.length < 500) return rows;
   }
 }
+// Same idea as fetchAllSessionRows, but for call sites that need specific
+// columns or ordering (e.g. chronological, for the confidence sparkline's
+// trend line) rather than select('*').order('id'). queryFactory returns a
+// fresh query each call — range() only applies once per query object.
+async function fetchAllRows(queryFactory, batchSize = 500) {
+  const rows = [];
+  for (let offset = 0; ; offset += batchSize) {
+    const { data, error } = await queryFactory().range(offset, offset + batchSize - 1);
+    if (error) throw error;
+    rows.push(...data);
+    if (data.length < batchSize) return rows;
+  }
+}
 function csvCell(value) {
   let text = value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
   // Prevent student-authored text being interpreted as a spreadsheet formula.
@@ -2580,14 +2593,23 @@ async function loadTextMarkupAggregate() {
     return;
   }
 
-  const { data, error } = await supabaseClient
-    .from('text_markup_responses')
-    .select('spans')
-    .eq('session_id', currentSession.id)
-    .eq('prompt_id', activePromptId);
+  let data;
+  try {
+    data = await fetchAllRows(() => supabaseClient
+      .from('text_markup_responses')
+      .select('spans')
+      .eq('session_id', currentSession.id)
+      .eq('prompt_id', activePromptId)
+      .order('id'));
+  } catch (error) {
+    // Leave the last successfully-loaded aggregate on screen rather than
+    // blanking admin's own live view to zero on a transient load failure.
+    console.error('loadTextMarkupAggregate failed', error);
+    return;
+  }
   if (!requestIsCurrent()) return;
 
-  textMarkupResponses = error ? [] : (data || []);
+  textMarkupResponses = data;
   updateTextMarkupTotalCount();
 
   const counts = computeTextMarkupWordCounts(textMarkupResponses, textMarkupWords.length);
@@ -3195,28 +3217,36 @@ document.getElementById('mediavote-timeline-wrap').addEventListener('click', asy
 
 async function loadMediaVoteTimelineData() {
   const requestIsCurrent = beginViewRequest('loadMediaVoteTimelineData', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, currentSession.response_epoch]));
-  const [eventsRes, votesRes, optionsRes] = await Promise.all([
-    supabaseClient
-      .from('media_transport_events')
-      .select('action, position_ms, created_at')
-      .eq('session_id', currentSession.id)
-      .order('created_at', { ascending: true }),
-    supabaseClient
-      .from('media_vote_responses')
-      .select('option_id, created_at')
-      .eq('session_id', currentSession.id)
-      .order('created_at', { ascending: true }),
-    supabaseClient
-      .from('quick_tap_options')
-      .select('*')
-      .eq('session_id', currentSession.id)
-      .order('sort_order', { ascending: true })
-  ]);
+  let events, votes, options;
+  try {
+    [events, votes, options] = await Promise.all([
+      fetchAllRows(() => supabaseClient
+        .from('media_transport_events')
+        .select('action, position_ms, created_at')
+        .eq('session_id', currentSession.id)
+        .order('created_at', { ascending: true })),
+      fetchAllRows(() => supabaseClient
+        .from('media_vote_responses')
+        .select('option_id, created_at')
+        .eq('session_id', currentSession.id)
+        .order('created_at', { ascending: true })),
+      fetchAllRows(() => supabaseClient
+        .from('quick_tap_options')
+        .select('*')
+        .eq('session_id', currentSession.id)
+        .order('sort_order', { ascending: true }))
+    ]);
+  } catch (error) {
+    // Leave the last successfully-loaded timeline on screen rather than
+    // blanking admin's own live view to zero on a transient load failure.
+    console.error('loadMediaVoteTimelineData failed', error);
+    return;
+  }
   if (!requestIsCurrent()) return;
 
-  mediaVoteRawEvents = eventsRes.data || [];
-  mediaVoteRawResponses = votesRes.data || [];
-  mediaVoteTimelineOptions = optionsRes.data || [];
+  mediaVoteRawEvents = events;
+  mediaVoteRawResponses = votes;
+  mediaVoteTimelineOptions = options;
 }
 
 function renderMediaVoteBucketToggle() {
@@ -4012,28 +4042,29 @@ async function loadInitialFeed() {
     return;
   }
 
-  let query = supabaseClient
-    .from('friction_pool')
-    .select('*, session_categories(label)')
-    .eq('session_id', currentSession.id)
-    .eq('status', 'active');
-
-  if (isGuided) {
-    query = query.eq('category_id', activeCategoryId);
-  }
-
-  const { data, error } = await query.order('created_at', { ascending: false });
-  if (!requestIsCurrent()) return;
-
-  if (error) {
+  let data;
+  try {
+    data = await fetchAllRows(() => {
+      let query = supabaseClient
+        .from('friction_pool')
+        .select('*, session_categories(label)')
+        .eq('session_id', currentSession.id)
+        .eq('status', 'active');
+      if (isGuided) {
+        query = query.eq('category_id', activeCategoryId);
+      }
+      return query.order('created_at', { ascending: false }).order('id');
+    });
+  } catch (error) {
     handleQueryError(error);
     return;
   }
+  if (!requestIsCurrent()) return;
 
   feedEl.innerHTML = '';
   entryElements.clear();
   feedEntryMeta = [];
-  for (const row of (data || [])) {
+  for (const row of data) {
     addFeedEntry(row, row.session_categories ? row.session_categories.label : '', false);
   }
   updateEmptyFeedState();
@@ -4125,25 +4156,27 @@ function renderParkedEntry(row, categoryLabel) {
 async function loadParkedList() {
   const requestIsCurrent = beginViewRequest('loadParkedList', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, showingParked]));
   const listEl = document.getElementById('parked-list');
-  listEl.innerHTML = '';
 
-  const { data, error } = await supabaseClient
-    .from('friction_pool')
-    .select('*, session_categories(label)')
-    .eq('session_id', currentSession.id)
-    .eq('status', 'parked')
-    .order('created_at', { ascending: false });
-  if (!requestIsCurrent()) return;
-
-  if (error) {
+  let data;
+  try {
+    data = await fetchAllRows(() => supabaseClient
+      .from('friction_pool')
+      .select('*, session_categories(label)')
+      .eq('session_id', currentSession.id)
+      .eq('status', 'parked')
+      .order('created_at', { ascending: false })
+      .order('id'));
+  } catch (error) {
     handleQueryError(error);
     return;
   }
+  if (!requestIsCurrent()) return;
 
-  for (const row of (data || [])) {
+  listEl.innerHTML = '';
+  for (const row of data) {
     renderParkedEntry(row, row.session_categories ? row.session_categories.label : '');
   }
-  document.getElementById('parked-empty').classList.toggle('hidden', (data || []).length > 0);
+  document.getElementById('parked-empty').classList.toggle('hidden', data.length > 0);
 }
 
 async function toggleParkedView() {
@@ -4563,14 +4596,23 @@ async function loadQuickTapResults() {
     if (!CHART_TYPES.includes(chartType)) chartType = 'buttons';
   }
 
-  const { data: responses, error: respError } = await supabaseClient
-    .from('quick_tap_responses')
-    .select('id, option_id, device_id, created_at')
-    .eq('session_id', currentSession.id)
-    .order('created_at', { ascending: true });
+  let responses;
+  try {
+    responses = await fetchAllRows(() => supabaseClient
+      .from('quick_tap_responses')
+      .select('id, option_id, device_id, created_at')
+      .eq('session_id', currentSession.id)
+      .order('created_at', { ascending: true })
+      .order('id'));
+  } catch (error) {
+    // Leave the last successfully-loaded tally on screen rather than
+    // blanking admin's own live view to zero on a transient load failure.
+    console.error('loadQuickTapResults (responses) failed', error);
+    return;
+  }
   if (!requestIsCurrent()) return;
 
-  quickTapResponseLog = respError ? [] : (responses || []);
+  quickTapResponseLog = responses;
   quickTapCounts = {};
   for (const r of quickTapResponseLog) {
     quickTapCounts[r.option_id] = (quickTapCounts[r.option_id] || 0) + 1;

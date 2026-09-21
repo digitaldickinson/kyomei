@@ -726,6 +726,19 @@ function releaseSubscription(channel, timer) {
   if (timer) clearTimeout(timer);
   if (channel) supabaseClient.removeChannel(channel);
 }
+// Aggregate reads (quick-tap tally, media-vote timeline) must not silently
+// truncate once a session passes the backend's default row limit — pages
+// through in batches until a short page confirms there's nothing left.
+// queryFactory returns a fresh query each call (range() only applies once).
+async function fetchAllRows(queryFactory, batchSize = 500) {
+  const rows = [];
+  for (let offset = 0; ; offset += batchSize) {
+    const { data, error } = await queryFactory().range(offset, offset + batchSize - 1);
+    if (error) throw error;
+    rows.push(...data);
+    if (data.length < batchSize) return rows;
+  }
+}
 // One lifecycle for session controls: subscribe, refresh after reconnect,
 // retry after interruption, and dispose without restarting a closed view.
 function watchSession(sessionId, onRow, onStatus = () => {}) {
@@ -925,30 +938,32 @@ async function loadFeed() {
   const requestIsCurrent = beginViewRequest('loadFeed', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, [activeCategoryId,currentSession.feed_revision]]));
   const listEl = document.getElementById('feed-list');
 
-  let query = supabaseClient
-    .from('friction_pool')
-    .select('*, session_categories(label)')
-    .eq('session_id', currentSession.id)
-    .eq('status', 'active');
-
-  if (displayMode === 'guided') {
-    query = query.eq('category_id', activeCategoryId);
+  let data;
+  try {
+    data = await fetchAllRows(() => {
+      let query = supabaseClient
+        .from('friction_pool')
+        .select('*, session_categories(label)')
+        .eq('session_id', currentSession.id)
+        .eq('status', 'active');
+      if (displayMode === 'guided') {
+        query = query.eq('category_id', activeCategoryId);
+      }
+      return query.order('created_at', { ascending: false }).order('id');
+    });
+  } catch (error) {
+    // Leave whatever's currently on screen rather than blanking the
+    // room's display to "no submissions" on a transient load failure.
+    console.error('loadFeed failed', error);
+    return;
   }
-
-  const { data, error } = await query.order('created_at', { ascending: false });
   if (!requestIsCurrent()) return;
 
   feedEntries.clear();
   feedEntryMeta = [];
   listEl.innerHTML = '';
 
-  if (error) {
-    console.error('loadFeed failed', error);
-    updateFeedVisibility();
-    return;
-  }
-
-  for (const row of (data || [])) {
+  for (const row of data) {
     addFeedEntry(row, row.session_categories ? row.session_categories.label : '', false);
   }
   updateFeedVisibility();
@@ -1586,14 +1601,22 @@ function incrementQuickTapCount(row) {
 
 async function loadQuickTapCounts() {
   const requestIsCurrent = beginViewRequest('loadQuickTapCounts', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, resultsRevealed]));
-  const { data, error } = await supabaseClient
-    .from('quick_tap_responses')
-    .select('id, option_id, device_id, created_at')
-    .eq('session_id', currentSession.id)
-    .order('created_at', { ascending: true });
+  let data;
+  try {
+    data = await fetchAllRows(() => supabaseClient
+      .from('quick_tap_responses')
+      .select('id, option_id, device_id, created_at')
+      .eq('session_id', currentSession.id)
+      .order('created_at', { ascending: true }));
+  } catch (error) {
+    // Leave the last successfully-loaded tally on screen rather than
+    // blanking the room's display to zero on a transient load failure.
+    console.error('loadQuickTapCounts failed', error);
+    return;
+  }
   if (!requestIsCurrent()) return;
 
-  quickTapResponseLog = error ? [] : (data || []);
+  quickTapResponseLog = data;
   quickTapCounts = {};
   for (const r of quickTapResponseLog) {
     quickTapCounts[r.option_id] = (quickTapCounts[r.option_id] || 0) + 1;
@@ -2041,14 +2064,23 @@ async function renderTextMarkupDisplayState() {
 
 async function loadTextMarkupAggregate() {
   const requestIsCurrent = beginViewRequest('loadTextMarkupAggregate', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, [textMarkupActivePromptId,textMarkupComparePromptId,resultsRevealed]]));
-  const { data, error } = await supabaseClient
-    .from('text_markup_responses')
-    .select('spans')
-    .eq('session_id', currentSession.id)
-    .eq('prompt_id', textMarkupActivePromptId);
+  let data;
+  try {
+    data = await fetchAllRows(() => supabaseClient
+      .from('text_markup_responses')
+      .select('spans')
+      .eq('session_id', currentSession.id)
+      .eq('prompt_id', textMarkupActivePromptId)
+      .order('id'));
+  } catch (error) {
+    // Leave whatever's currently on screen rather than blanking the
+    // room's display to zero on a transient load failure.
+    console.error('loadTextMarkupAggregate failed', error);
+    return;
+  }
   if (!requestIsCurrent()) return;
 
-  textMarkupResponses = error ? [] : (data || []);
+  textMarkupResponses = data;
   updateTextMarkupTotalCount();
 
   const counts = computeTextMarkupWordCounts(textMarkupResponses, textMarkupWords.length);
@@ -2061,14 +2093,20 @@ async function loadTextMarkupAggregate() {
     const promptA = textMarkupPromptsList.find(p => p.id === textMarkupActivePromptId);
     document.getElementById('textmarkup-compare-label-a').textContent = promptA ? promptA.prompt_text : '';
 
-    const { data: compareData, error: compareError } = await supabaseClient
-      .from('text_markup_responses')
-      .select('spans')
-      .eq('session_id', currentSession.id)
-      .eq('prompt_id', textMarkupComparePromptId);
-  if (!requestIsCurrent()) return;
-    const compareResponses = compareError ? [] : (compareData || []);
-    const compareCounts = computeTextMarkupWordCounts(compareResponses, textMarkupWords.length);
+    let compareData;
+    try {
+      compareData = await fetchAllRows(() => supabaseClient
+        .from('text_markup_responses')
+        .select('spans')
+        .eq('session_id', currentSession.id)
+        .eq('prompt_id', textMarkupComparePromptId)
+        .order('id'));
+    } catch (error) {
+      console.error('loadTextMarkupAggregate (compare) failed', error);
+      return;
+    }
+    if (!requestIsCurrent()) return;
+    const compareCounts = computeTextMarkupWordCounts(compareData, textMarkupWords.length);
     renderTextMarkupHeatmap(compareCounts, 'textmarkup-display-heatmap-view-b');
     const promptB = textMarkupPromptsList.find(p => p.id === textMarkupComparePromptId);
     document.getElementById('textmarkup-compare-label-b').textContent = promptB ? promptB.prompt_text : '';
@@ -2550,28 +2588,36 @@ function stopDisplayPlayheadTicker() {
 
 async function loadMediaVoteTimelineData() {
   const requestIsCurrent = beginViewRequest('loadMediaVoteTimelineData', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch, resultsRevealed]));
-  const [eventsRes, votesRes, optionsRes] = await Promise.all([
-    supabaseClient
-      .from('media_transport_events')
-      .select('action, position_ms, created_at')
-      .eq('session_id', currentSession.id)
-      .order('created_at', { ascending: true }),
-    supabaseClient
-      .from('media_vote_responses')
-      .select('option_id, created_at')
-      .eq('session_id', currentSession.id)
-      .order('created_at', { ascending: true }),
-    supabaseClient
-      .from('quick_tap_options')
-      .select('*')
-      .eq('session_id', currentSession.id)
-      .order('sort_order', { ascending: true })
-  ]);
+  let events, votes, options;
+  try {
+    [events, votes, options] = await Promise.all([
+      fetchAllRows(() => supabaseClient
+        .from('media_transport_events')
+        .select('action, position_ms, created_at')
+        .eq('session_id', currentSession.id)
+        .order('created_at', { ascending: true })),
+      fetchAllRows(() => supabaseClient
+        .from('media_vote_responses')
+        .select('option_id, created_at')
+        .eq('session_id', currentSession.id)
+        .order('created_at', { ascending: true })),
+      fetchAllRows(() => supabaseClient
+        .from('quick_tap_options')
+        .select('*')
+        .eq('session_id', currentSession.id)
+        .order('sort_order', { ascending: true }))
+    ]);
+  } catch (error) {
+    // Leave the last successfully-loaded timeline on screen rather than
+    // blanking the room's display to zero on a transient load failure.
+    console.error('loadMediaVoteTimelineData failed', error);
+    return;
+  }
   if (!requestIsCurrent()) return;
 
-  mediaVoteRawEvents = eventsRes.data || [];
-  mediaVoteRawResponses = votesRes.data || [];
-  mediaVoteTimelineOptions = optionsRes.data || [];
+  mediaVoteRawEvents = events;
+  mediaVoteRawResponses = votes;
+  mediaVoteTimelineOptions = options;
 }
 
 // Revealing no longer hides the video/player — it stays visible above the
