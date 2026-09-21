@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>kyomei — Display</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <style>
   :root {
@@ -2277,10 +2277,15 @@ async function unlockAutoplay(video) {
 // embed Kaltura's Share -> Embed panel generates by default — that embed
 // type is sandboxed specifically against a JS control API, which would
 // silently break every transport command. partnerId/uiConfId are constant
-// for this MMU account across every video, so they're hardcoded here
+// for one Kaltura account across every video, so they're configured here
 // rather than stored per session — only entryId varies.
-const KALTURA_PARTNER_ID = 1128062;
-const KALTURA_UICONF_ID = 51416912;
+//
+// Institution-specific — fill in your own Kaltura partner/uiconf ID
+// before using the mmutube media source. Every other session type works
+// with these left as placeholders; only Media Vote sessions using the
+// mmutube source (not a local file) need this.
+const KALTURA_PARTNER_ID = 'YOUR_KALTURA_PARTNER_ID_HERE';
+const KALTURA_UICONF_ID = 'YOUR_KALTURA_UICONF_ID_HERE';
 let kalturaScriptPromise = null;
 
 // Loaded once per partnerId/uiConfId pair (i.e. once ever, for this MMU
@@ -2409,6 +2414,11 @@ async function loadMediaVoteKaltura(entryId) {
   const container = document.getElementById('mediavote-kaltura-container');
   document.getElementById('mediavote-kaltura-prompt').classList.add('hidden');
   container.classList.remove('hidden');
+
+  if (KALTURA_PARTNER_ID === 'YOUR_KALTURA_PARTNER_ID_HERE' || KALTURA_UICONF_ID === 'YOUR_KALTURA_UICONF_ID_HERE') {
+    showMediaVoteError('This deployment has no Kaltura account configured — fill in KALTURA_PARTNER_ID/KALTURA_UICONF_ID near the top of the Media Vote section in this file, or use a local video file instead of mmutube.');
+    return;
+  }
 
   try {
     await loadKalturaScript();
@@ -2851,6 +2861,12 @@ document.getElementById('video-test-mmutube-load-btn').addEventListener('click',
     return;
   }
   errorEl.classList.add('hidden');
+
+  if (KALTURA_PARTNER_ID === 'YOUR_KALTURA_PARTNER_ID_HERE' || KALTURA_UICONF_ID === 'YOUR_KALTURA_UICONF_ID_HERE') {
+    errorEl.textContent = 'This deployment has no Kaltura account configured — fill in KALTURA_PARTNER_ID/KALTURA_UICONF_ID near the top of the Media Vote section in this file.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
 
   const container = document.getElementById('video-test-kaltura-container');
   document.getElementById('video-test-source-row').classList.add('hidden');

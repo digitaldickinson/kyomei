@@ -71,6 +71,11 @@ than on `main`, since GitHub Pages serves whatever branch it's pointed at direct
 lets `main` stay safe to clone. If you're doing the same, point Pages at your own equivalent
 branch, not `main`.
 
+Media Vote's `mmutube` source is similarly account-specific — `KALTURA_PARTNER_ID`/
+`KALTURA_UICONF_ID` near the top of `kyomei-display.html`'s Media Vote section are placeholders on
+`main` too, and only need filling in if you actually use `mmutube` (a local video file works with
+no Kaltura account at all). Everything else works unaffected either way.
+
 ## Reliability and session workflows (2.3.0)
 
 Each page remains self-contained, with no new runtime assets or build step.

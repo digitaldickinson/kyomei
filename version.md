@@ -8,11 +8,22 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.18**
+**Current version: 2.3.19**
 
 ---
 
 ## Log
+
+### 2.3.19 — 2026-09-21
+Security review fixes (install-guide/dependency section): `@supabase/supabase-js` was pinned only
+to major version 2 on all three pages, meaning jsDelivr silently serves whatever the latest 2.x
+release is at any moment — pinned to the exact current release (2.116.0) instead. `KALTURA_PARTNER_ID`/
+`KALTURA_UICONF_ID` in `kyomei-display.html` (the Media Vote `mmutube` source) had the same
+institution-specific-credential problem as the Supabase config did — now placeholders on `main`
+with a scoped guard (only the `mmutube` path is affected; local video files and every other session
+type are unaffected) showing a clear message instead of silently trying to load through the
+original institution's Kaltura account. `README.md` documents both. `live` branch needs the real
+Kaltura IDs restored alongside its existing real Supabase credentials.
 
 ### 2.3.18 — 2026-09-21
 Security review fix: quick-tap counts, media-vote timelines, the text-response feed, and the
