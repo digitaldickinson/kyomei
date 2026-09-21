@@ -8,11 +8,30 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.15**
+**Current version: 2.3.17**
 
 ---
 
 ## Log
+
+### 2.3.17 — 2026-09-21 — **schema**
+Security review fix: `one_vote_per_device` now has a real database backstop (`quick_tap_responses`
+trigger, `check_one_vote_per_device`) rejecting a second insert for the same `(session_id,
+device_id)` pair — previously enforced only by a client-side `localStorage` check, trivially
+bypassed by clearing storage. Explicit decision, not a silent gap: `device_id` stays unauthenticated
+so this raises the bar from trivial to deliberate, not to unbeatable. `kyomei.html`'s
+`submissionErrorMessage()` maps the new `ALREADY_VOTED` error to "Already recorded from this
+device." New migration `migrations/008_one_vote_per_device_backstop.sql`.
+
+### 2.3.16 — 2026-09-21 — **schema**
+Security review fix: `friction_pool.category_id`, `quick_tap_responses.option_id`,
+`text_markup_responses.prompt_id`, and `media_vote_responses.option_id` are now composite foreign
+keys (adding `session_id`) instead of plain id-only FKs — closes a gap where a response could
+carry one session's `session_id` but another session's category/option/prompt id, both
+individually valid. Confirmed ranking's RPC-only write path (`record_ranking_move`,
+`submit_ranking_order`) already checks this itself; no change needed there. New migration
+`migrations/007_cross_session_fk_guard.sql` — **will fail to apply if any existing row already has
+a mismatched id**, naming the offending row.
 
 ### 2.3.15 — 2026-09-21 — **schema**
 Security review fix: every anon-facing read policy (11 across `sessions`, `session_categories`,

@@ -611,6 +611,7 @@ function submissionErrorMessage(error) {
   if (error.message === 'OFFLINE') return 'Not sent — reconnect and try again.';
   if (error.message === 'SUBMISSIONS_CLOSED') return 'Not sent — submissions are closed.';
   if (error.message === 'SESSION_RESET') return 'The tutor reset this session. Refresh before submitting again.';
+  if (error.message === 'ALREADY_VOTED') return 'Already recorded from this device.';
   return 'Receipt not confirmed — check your connection before retrying.';
 }
 async function sendStudentRequest(operation) {
