@@ -11,6 +11,11 @@ from **`kyomei.html`**; **`kyomei-display.html`** is the read-only view you proj
 All shortcuts are global to the admin console (not the display), work only while a session is open
 (the live session view screen), and are ignored while you're typing into a text field.
 
+The session view header also shows a **Keyboard shortcuts** panel — only the keys that apply to the
+current session type, each with its current state (e.g. "G — Feed order — Grouped"), so you don't
+need this table open while running a session. A key that has nothing to apply to (Space before
+results are revealed on a Text markup session, for instance) simply doesn't appear in the panel.
+
 | Key | Action | Applies to |
 |---|---|---|
 | **L** | Show/hide the join QR code and URL on the display | Every session type |

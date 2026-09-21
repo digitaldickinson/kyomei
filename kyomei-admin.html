@@ -426,6 +426,37 @@
     margin-top: 8px;
     margin-left: 8px;
   }
+  .shortcuts-panel {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 220px;
+  }
+  .shortcuts-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+  }
+  .shortcut-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+  .shortcut-row kbd {
+    font-family: inherit;
+    font-weight: 700;
+    font-size: 12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 2px 7px;
+    min-width: 18px;
+    text-align: center;
+  }
+  .shortcut-label { color: var(--muted); flex: 1; }
+  .shortcut-state { font-weight: 600; }
 
   /* ---- Feed ---- */
   .feed { display: flex; flex-direction: column; gap: 10px; }
@@ -695,6 +726,29 @@
           <div class="session-code-badge" id="session-view-code"></div>
           <div class="mode-badge" id="session-mode-badge"></div>
           <div class="join-info-badge hidden" id="join-info-badge">Join info shown (press L to hide)</div>
+        </div>
+        <div class="shortcuts-panel" id="shortcuts-panel">
+          <div class="shortcuts-title">Keyboard shortcuts</div>
+          <div class="shortcut-row" id="shortcut-row-l">
+            <kbd>L</kbd>
+            <span class="shortcut-label">Join info on display</span>
+            <span class="shortcut-state" id="shortcut-state-l">Hidden</span>
+          </div>
+          <div class="shortcut-row hidden" id="shortcut-row-g">
+            <kbd>G</kbd>
+            <span class="shortcut-label">Feed order</span>
+            <span class="shortcut-state" id="shortcut-state-g">Chronological</span>
+          </div>
+          <div class="shortcut-row hidden" id="shortcut-row-m">
+            <kbd>M</kbd>
+            <span class="shortcut-label">Display feed</span>
+            <span class="shortcut-state" id="shortcut-state-m">Cascade</span>
+          </div>
+          <div class="shortcut-row hidden" id="shortcut-row-space">
+            <kbd>Space</kbd>
+            <span class="shortcut-label">Chart</span>
+            <span class="shortcut-state" id="shortcut-state-space">Buttons</span>
+          </div>
         </div>
       </div>
 
@@ -1875,6 +1929,10 @@ function updateRevealUI() {
     tmCount.classList.add('hidden');
     mvTimeline.classList.add('hidden');
   }
+  // Text Markup's Space shortcut only works once revealed — catches the
+  // hide-again transition too, not just newly-revealed (applyTextMarkupChart-
+  // TypeVisibility's own call above only fires on the reveal direction).
+  updateShortcutsPanel();
 }
 
 // Shared by reveal-toggle-btn (quicktap/textmarkup/mediavote) and
@@ -1904,10 +1962,57 @@ async function toggleResultsRevealed() {
 document.getElementById('reveal-toggle-btn').addEventListener('click', toggleResultsRevealed);
 document.getElementById('runningorder-reveal-toggle-btn').addEventListener('click', toggleResultsRevealed);
 
+// ---------------- Shortcuts panel — contextual reminder + live state ----------------
+// Piggybacks on the existing per-toggle indicator functions (updateJoinInfoBadge,
+// updateFeedViewModeIndicator, updateFeedMasonryIndicator, applyChartTypeVisibility,
+// applyTextMarkupChartTypeVisibility) rather than needing its own call site at every
+// place those toggles change — it just recomputes the whole panel from current state
+// each time any of them already runs.
+function updateShortcutsPanel() {
+  if (!currentSession) return;
+
+  const isRunningOrder = !!currentSession.running_order_enabled;
+  const isQuickTap = !isRunningOrder && !!currentSession.quick_tap_enabled;
+  const isTextMarkup = !isRunningOrder && !isQuickTap && !!currentSession.text_markup_enabled;
+  const isMediaVote = !isRunningOrder && !isQuickTap && !isTextMarkup && !!currentSession.media_vote_enabled;
+  const isGuided = !isRunningOrder && !isQuickTap && !isTextMarkup && !isMediaVote && !!currentSession.guided_categories;
+  const feedGroupedApplies = !isRunningOrder && !isQuickTap && !isTextMarkup && !isMediaVote && !isGuided;
+
+  document.getElementById('shortcut-state-l').textContent = joinInfoShown ? 'Shown' : 'Hidden';
+
+  document.getElementById('shortcut-row-g').classList.toggle('hidden', !feedGroupedApplies);
+  if (feedGroupedApplies) {
+    document.getElementById('shortcut-state-g').textContent = feedViewMode === 'grouped' ? 'Grouped' : 'Chronological';
+  }
+
+  document.getElementById('shortcut-row-m').classList.toggle('hidden', !feedGroupedApplies);
+  if (feedGroupedApplies) {
+    document.getElementById('shortcut-state-m').textContent = feedMasonryOn ? 'Wall view' : 'Cascade';
+  }
+
+  // Quick Tap's chart cycle always works (once there's more than one view
+  // to cycle to); Text Markup's only works once results are revealed —
+  // mirrors cycleChartType()/cycleTextMarkupChartType()'s own guards, so
+  // this never claims Space does something it currently won't.
+  const spaceRow = document.getElementById('shortcut-row-space');
+  if (isQuickTap && CHART_TYPES.length > 1) {
+    spaceRow.classList.remove('hidden');
+    const labels = { buttons: 'Buttons', bar: 'Bar', pie: 'Pie' };
+    document.getElementById('shortcut-state-space').textContent = labels[chartType] || chartType;
+  } else if (isTextMarkup && resultsRevealed) {
+    spaceRow.classList.remove('hidden');
+    const labels = { heatmap: 'Heatmap', community: 'Community highlights' };
+    document.getElementById('shortcut-state-space').textContent = labels[textMarkupChartType] || textMarkupChartType;
+  } else {
+    spaceRow.classList.add('hidden');
+  }
+}
+
 // ---------------- Join-info overlay (L key, admin-triggered) ----------------
 function updateJoinInfoBadge() {
   const badge = document.getElementById('join-info-badge');
   if (badge) badge.classList.toggle('hidden', !joinInfoShown);
+  updateShortcutsPanel();
 }
 
 async function toggleJoinInfo() {
@@ -2245,6 +2350,7 @@ function applyTextMarkupChartTypeVisibility() {
   document.getElementById('textmarkup-heatmap-view').classList.toggle('hidden', textMarkupChartType !== 'heatmap');
   document.getElementById('textmarkup-heatmap-controls').classList.toggle('hidden', textMarkupChartType !== 'heatmap');
   document.getElementById('textmarkup-community-view').classList.toggle('hidden', textMarkupChartType !== 'community');
+  updateShortcutsPanel();
 }
 
 function applyTextMarkupHeatmapControlButtons() {
@@ -4205,6 +4311,7 @@ function applyFeedViewMode() {
 function updateFeedViewModeIndicator() {
   const el = document.getElementById('feed-view-mode-indicator');
   if (el) el.classList.toggle('hidden', feedViewMode !== 'grouped');
+  updateShortcutsPanel();
 }
 
 async function toggleFeedViewMode() {
@@ -4255,6 +4362,7 @@ let feedMasonryOn = false; // mirrors currentSession.feed_masonry
 function updateFeedMasonryIndicator() {
   const el = document.getElementById('feed-masonry-indicator');
   if (el) el.classList.toggle('hidden', !feedMasonryOn);
+  updateShortcutsPanel();
 }
 
 async function toggleFeedMasonry() {
@@ -4760,6 +4868,7 @@ function applyChartTypeVisibility() {
   // cycle" hint only makes sense when there's something to cycle to.
   const hintEl = document.getElementById('quicktap-cycle-hint');
   if (hintEl) hintEl.classList.toggle('hidden', CHART_TYPES.length <= 1);
+  updateShortcutsPanel();
 }
 
 async function cycleChartType() {

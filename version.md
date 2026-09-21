@@ -8,11 +8,20 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.7**
+**Current version: 2.3.8**
 
 ---
 
 ## Log
+
+### 2.3.8 — 2026-09-21
+Admin session view now shows a **Keyboard shortcuts** panel in the session header — only the keys
+that apply to the current session type (L/G/M/Space, per the existing per-key session-type gates),
+each with its live current state (e.g. "M — Display feed — Wall view"). Recomputed by piggybacking
+on the five existing state-change functions (`updateJoinInfoBadge`, `updateFeedViewModeIndicator`,
+`updateFeedMasonryIndicator`, `applyChartTypeVisibility`, `applyTextMarkupChartTypeVisibility`, plus
+`updateRevealUI` for Text Markup's reveal-gated Space row) rather than a new call site at every
+place those toggles change. No schema change.
 
 ### 2.3.7 — 2026-09-18 — **schema**
 Added a "wall view" masonry layout for the plain Text response feed on `kyomei-display.html` — a
