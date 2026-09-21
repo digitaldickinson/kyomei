@@ -596,7 +596,6 @@
     <div class="feed-session-name" id="feed-session-name"></div>
     <div class="feed-category-label hidden" id="feed-category-label"></div>
     <div id="feed-view-mode-indicator" class="feed-view-mode-indicator hidden">Grouped by category (press G to toggle)</div>
-    <div id="feed-masonry-indicator" class="feed-view-mode-indicator hidden">Wall view (press M to toggle)</div>
   </div>
   <div id="feed-list" class="feed-list"></div>
   <div id="feed-empty-msg" class="feed-empty-msg hidden">Waiting for submissions…</div>
@@ -690,6 +689,10 @@
 // ======================================================================
 // CONFIG — fill in before deploying. anon/public key only — NEVER the
 // service_role key. Safe to expose in client-side code.
+//
+// New installation? See migrations/README.md first — run the tracked
+// baseline + numbered migrations against your own Supabase project (with
+// your admin login email in is_admin()) before pointing this at it.
 // ======================================================================
 const SUPABASE_URL = 'https://wlpbromzijkegqlbytew.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_dg2m3ukxrohfX-IWL1IPMw_iJvd7wn3';
@@ -1054,8 +1057,6 @@ function updateFeedViewModeIndicator() {
 let feedMasonryOn = false;
 
 function updateFeedMasonryIndicator() {
-  const el = document.getElementById('feed-masonry-indicator');
-  if (el) el.classList.toggle('hidden', !feedMasonryOn);
   document.getElementById('feed-list').classList.toggle('masonry-layout', feedMasonryOn);
 }
 

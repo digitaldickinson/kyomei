@@ -8,11 +8,24 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.9**
+**Current version: 2.3.11**
 
 ---
 
 ## Log
+
+### 2.3.11 — 2026-09-21
+Each app page's `CONFIG` comment block (`kyomei-admin.html`, `kyomei.html`, `kyomei-display.html`)
+now points a new deployer at `migrations/README.md` before they fill in `SUPABASE_URL`/
+`SUPABASE_ANON_KEY` — the config block was the only thing a from-scratch deployer would definitely
+see, but gave no hint the database needed setting up first. No functional change.
+
+### 2.3.10 — 2026-09-21
+Removed the "Wall view (press M to toggle)" pill from `kyomei-display.html`'s projected feed — a
+room-facing hint to press a key only the admin operator can press wasn't useful there. The actual
+layout toggle is untouched; `updateFeedMasonryIndicator()` still applies `.masonry-layout` to
+`#feed-list`, it just no longer also shows/hides a pill. Admin's own equivalent pill and shortcuts
+panel entry are unchanged.
 
 ### 2.3.9 — 2026-09-21
 Wall view (M) now applies to guided text-response sessions too, not just plain — it's a layout
