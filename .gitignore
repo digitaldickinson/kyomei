@@ -1,2 +1,5 @@
 CLAUDE.md
 friction_pool_schema.sql
+
+# Local development checks are not shipped with the deployment template.
+tests/

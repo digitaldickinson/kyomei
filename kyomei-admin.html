@@ -1139,7 +1139,7 @@ document.getElementById('duplicate-session-form').addEventListener('submit', asy
 async function fetchAllSessionRows(table, sessionId) {
   const rows = [];
   for (let offset = 0; ; offset += 500) {
-    const { data, error } = await supabaseClient.from(table).select('*').eq('session_id', sessionId).order('id').range(offset, offset + 499);
+    const { data, error } = await supabaseClient.from(table).select(table === 'text_markup_responses' ? 'id,session_id,prompt_id,spans,updated_at,response_epoch' : '*').eq('session_id', sessionId).order('id').range(offset, offset + 499);
     if (error) throw error;
     rows.push(...data);
     if (data.length < 500) return rows;
@@ -3914,7 +3914,7 @@ async function fetchDeleteImpactCounts(session) {
 
   if (session.text_markup_enabled) {
     const [responses, prompts] = await Promise.all([
-      supabaseClient.from('text_markup_responses').select('*', { count: 'exact', head: true }).eq('session_id', session.id),
+      supabaseClient.from('text_markup_responses').select('id', { count: 'exact', head: true }).eq('session_id', session.id),
       supabaseClient.from('text_markup_prompts').select('*', { count: 'exact', head: true }).eq('session_id', session.id)
     ]);
     return {

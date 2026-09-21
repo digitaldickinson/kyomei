@@ -568,12 +568,14 @@ const safeStorage = {
   setItem(key, value) { memoryStorage.set(key, value); try { localStorage.setItem(key, value); } catch { /* drafts remain available in this tab */ } },
   removeItem(key) { memoryStorage.delete(key); try { localStorage.removeItem(key); } catch {} }
 };
-function getDeviceId() {
-  let id = safeStorage.getItem('kyomei_device_id');
-  if (!id) { id = crypto.randomUUID(); safeStorage.setItem('kyomei_device_id', id); }
+function getDeviceId(key = 'kyomei_device_id') {
+  let id = safeStorage.getItem(key);
+  if (!id) { id = crypto.randomUUID(); safeStorage.setItem(key, id); }
   return id;
 }
 const deviceId = getDeviceId();
+// Editing tokens never go into public vote rows; the database stores only hashes.
+const privateDeviceSecret = getDeviceId('kyomei_private_device_secret_v1');
 
 let currentSession = null;
 let currentCategories = [];
@@ -610,6 +612,7 @@ document.getElementById('retry-connection-btn').addEventListener('click', () => 
 function submissionErrorMessage(error) {
   if (error.message === 'OFFLINE') return 'Not sent — reconnect and try again.';
   if (error.message === 'SUBMISSIONS_CLOSED') return 'Not sent — submissions are closed.';
+  if (error.message === 'SESSION_ARCHIVED') return 'Not sent — this session has been archived.';
   if (error.message === 'SESSION_RESET') return 'The tutor reset this session. Refresh before submitting again.';
   if (error.message === 'ALREADY_VOTED') return 'Already recorded from this device.';
   return 'Receipt not confirmed — check your connection before retrying.';
@@ -1025,7 +1028,7 @@ async function renderTextMarkupState() {
   const { data: existing } = await supabaseClient.rpc('get_own_text_markup_response', {
     p_session_id: currentSession.id,
     p_prompt_id: textMarkupActivePromptId,
-    p_device_id: deviceId
+    p_device_id: privateDeviceSecret
   });
 
   if (!isCurrent() || markupEditVersion !== editVersion) return;
@@ -1245,7 +1248,7 @@ document.getElementById('textmarkup-submit-btn').addEventListener('click', async
   const { error } = await sendStudentRequest(() => supabaseClient.rpc('submit_text_markup_response', {
     p_session_id: currentSession.id, p_response_epoch: currentSession.response_epoch || 0,
     p_prompt_id: textMarkupActivePromptId,
-    p_device_id: deviceId,
+    p_device_id: privateDeviceSecret,
     p_spans: currentRanges
   }));
 
@@ -1508,7 +1511,7 @@ async function initRunningOrder(session) {
   // Resume the claim and reconcile the local draft with the current item roster.
   const { data: existingTeams, error: teamReadError } = await supabaseClient.rpc('get_own_ranking_team', {
     p_session_id: session.id,
-    p_device_id: deviceId
+    p_device_id: privateDeviceSecret
   });
 
   if (teamReadError) { showStudentLoadError(); return; }
@@ -1523,7 +1526,7 @@ async function initRunningOrder(session) {
     showRunningOrderSuperseded();
   } else if (existingTeam) {
     rankingTeamId = existingTeam.id;
-    const { data: submitted, error: submissionReadError } = await supabaseClient.rpc('get_own_ranking_submission', { p_session_id: session.id, p_device_id: deviceId });
+    const { data: submitted, error: submissionReadError } = await supabaseClient.rpc('get_own_ranking_submission', { p_session_id: session.id, p_device_id: privateDeviceSecret });
     if (submissionReadError) { showStudentLoadError(); return; }
     if (submitted && submitted.some(row => row.team_id === rankingTeamId)) {
       rankingSubmitted = true;
@@ -1554,7 +1557,7 @@ document.getElementById('runningorder-claim-btn').addEventListener('click', asyn
   const { data, error } = await sendStudentRequest(() => supabaseClient.rpc('claim_ranking_team', {
     p_session_id: currentSession.id, p_response_epoch: currentSession.response_epoch || 0,
     p_team_name: teamName,
-    p_device_id: deviceId
+    p_device_id: privateDeviceSecret
   }).single());
 
   btn.disabled = false;
@@ -1630,7 +1633,7 @@ function moveRankingItem(index, direction) {
   supabaseClient.rpc('record_ranking_move', {
     p_session_id: currentSession.id, p_response_epoch: currentSession.response_epoch || 0,
     p_team_id: rankingTeamId,
-    p_device_id: deviceId,
+    p_device_id: privateDeviceSecret,
     p_moved_item_id: movedItem.id,
     p_swapped_with_item_id: swappedItem.id
   }).then(({ error }) => {
@@ -1694,7 +1697,7 @@ document.getElementById('runningorder-submit-btn').addEventListener('click', asy
   const { error } = await sendStudentRequest(() => supabaseClient.rpc('submit_ranking_order', {
     p_session_id: currentSession.id, p_response_epoch: currentSession.response_epoch || 0,
     p_team_id: rankingTeamId,
-    p_device_id: deviceId,
+    p_device_id: privateDeviceSecret,
     p_final_order: rankingOrder.map(item => item.id)
   }));
 

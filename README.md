@@ -44,7 +44,7 @@ Every session is exactly one of these, set at creation:
 
 Loaded via CDN `<script>` tags, no build step or package manager:
 
-- **[`@supabase/supabase-js`](https://github.com/supabase/supabase-js) v2** — all three pages. Database reads/writes and Realtime channel subscriptions.
+- **[`@supabase/supabase-js`](https://github.com/supabase/supabase-js) v2.116.0** — all three pages. Database reads/writes and Realtime channel subscriptions.
 - **[`qrcodejs`](https://github.com/davidshimjs/qrcodejs) v1.0.0** — `kyomei-display.html` only. Renders the join QR code.
 - **Kaltura Player (PlayKit JS)** — `kyomei-display.html` only, loaded dynamically at runtime (not a static `<script>` tag) the first time a Media Vote session's video source is `mmutube`. Uses the Dynamic Embed pattern (`KalturaPlayer.setup()`), not the non-programmable iframe embed.
 
@@ -58,13 +58,13 @@ channel subscriptions.
 
 ## Running locally
 
-These are static HTML files with no build step. But you will need to run them from a sever that everyone can access. For example, use GitHub Pages or Netify drop -  https://app.netlify.com/drop 
+These are static HTML files with no build step. Serve all four HTML pages together over HTTPS using GitHub Pages, Netlify, or another static host. For local development, use a localhost HTTP server rather than opening the files directly.
 
 ## Deploying your own copy
 
 `main` is a public template — `SUPABASE_URL`/`SUPABASE_ANON_KEY` are placeholders, and each page
 refuses to start (with a clear message) until they're filled in. See [migrations/README.md](migrations/README.md)
-for schema setup, then edit the `CONFIG` block near the top of each page's `<script>`.
+for the complete setup guide and [first-install SQL](migrations/first_install.sql), then edit the `CONFIG` block near the top of each page's `<script>`.
 
 This project's own live deployment keeps its real credentials on a separate `live` branch rather
 than on `main`, since GitHub Pages serves whatever branch it's pointed at directly — that's what
@@ -86,4 +86,10 @@ Each page remains self-contained, with no new runtime assets or build step.
 
 Apply the [database migration](migrations/README.md) before publishing these pages. The database baseline and ordered migrations are now tracked in `migrations/`; the original local schema file remains ignored.
 
-See [local verification](tests/README.md) for the optional development tests. Tests add no browser dependencies.
+Development tests are kept locally and are not included in this deployment template. Follow the deployment checks in [the setup guide](migrations/README.md) before using a new instance.
+
+This is a single-admin classroom tool. Unarchived sessions and their permitted results are publicly readable through the API; session codes are join conveniences, not passwords. Editing credentials are separate from public vote identifiers. One-vote mode limits a browser identifier, not a person: clearing storage or changing browsers permits another vote. See the setup guide for the full access model.
+
+## Licence
+
+[MIT](LICENSE).
