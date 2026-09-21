@@ -1172,6 +1172,12 @@ async function initGuidedDisplay(session) {
 
   document.getElementById('feed-session-name').textContent = session.name;
 
+  // Wall view is a layout choice, not a grouping one — it applies here
+  // too, unlike feed_grouped (which never applied to guided sessions,
+  // since only one category is ever visible at a time).
+  feedMasonryOn = !!session.feed_masonry;
+  updateFeedMasonryIndicator();
+
   if (activeCategoryId) {
     updateGuidedCategoryLabel();
     await loadFeed();
@@ -3070,10 +3076,11 @@ function setupSessionsSubscription() {
       if (!updateIsCurrent()) return;
       }
 
-      // Only meaningful for displayMode === 'plain' — admin's M key is the
-      // only thing that ever changes this.
+      // Meaningful for displayMode 'plain' or 'guided' (unlike feed_grouped,
+      // which only ever applies to 'plain') — admin's M key is the only
+      // thing that ever changes this.
       const newFeedMasonry = !!payload.new.feed_masonry;
-      if (displayMode === 'plain' && newFeedMasonry !== !!currentSession.feed_masonry) {
+      if ((displayMode === 'plain' || displayMode === 'guided') && newFeedMasonry !== !!currentSession.feed_masonry) {
         currentSession.feed_masonry = newFeedMasonry;
         feedMasonryOn = newFeedMasonry;
         updateFeedMasonryIndicator();

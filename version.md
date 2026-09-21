@@ -8,11 +8,19 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.8**
+**Current version: 2.3.9**
 
 ---
 
 ## Log
+
+### 2.3.9 — 2026-09-21
+Wall view (M) now applies to guided text-response sessions too, not just plain — it's a layout
+choice (how the currently-visible cards are arranged), unlike grouping (G), which stays plain-only
+since guided already shows one category at a time. `kyomei-admin.html`'s gate condition, keydown
+guard, and shortcuts panel updated; `kyomei-display.html`'s `initGuidedDisplay` and sessions
+subscription now also read/sync `feed_masonry` (previously only `initPlainFeedDisplay` did). No
+schema change — `feed_masonry` was already an unconstrained boolean.
 
 ### 2.3.8 — 2026-09-21
 Admin session view now shows a **Keyboard shortcuts** panel in the session header — only the keys

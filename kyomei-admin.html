@@ -1977,6 +1977,7 @@ function updateShortcutsPanel() {
   const isMediaVote = !isRunningOrder && !isQuickTap && !isTextMarkup && !!currentSession.media_vote_enabled;
   const isGuided = !isRunningOrder && !isQuickTap && !isTextMarkup && !isMediaVote && !!currentSession.guided_categories;
   const feedGroupedApplies = !isRunningOrder && !isQuickTap && !isTextMarkup && !isMediaVote && !isGuided;
+  const feedMasonryApplies = !isRunningOrder && !isQuickTap && !isTextMarkup && !isMediaVote;
 
   document.getElementById('shortcut-state-l').textContent = joinInfoShown ? 'Shown' : 'Hidden';
 
@@ -1985,8 +1986,8 @@ function updateShortcutsPanel() {
     document.getElementById('shortcut-state-g').textContent = feedViewMode === 'grouped' ? 'Grouped' : 'Chronological';
   }
 
-  document.getElementById('shortcut-row-m').classList.toggle('hidden', !feedGroupedApplies);
-  if (feedGroupedApplies) {
+  document.getElementById('shortcut-row-m').classList.toggle('hidden', !feedMasonryApplies);
+  if (feedMasonryApplies) {
     document.getElementById('shortcut-state-m').textContent = feedMasonryOn ? 'Wall view' : 'Cascade';
   }
 
@@ -3273,11 +3274,14 @@ async function enterSession(session) {
   }
   updateFeedViewModeIndicator();
 
-  // Wall view only ever applies where grouping does (see comment above) —
-  // it restyles the projected display's feed into a masonry wall, not
+  // Wall view is a layout choice, not a grouping one — it applies to any
+  // friction_pool-based feed (plain or guided, same as park/unpark below),
+  // unlike feed_grouped which needs more than one category to be meaningful.
+  // It restyles the projected display's feed into a masonry wall, not
   // admin's own feed, which keeps Park/Delete usable rather than squeezed
   // into a narrow column.
-  feedMasonryOn = feedGroupedApplies && !!session.feed_masonry;
+  const feedMasonryApplies = !isRunningOrder && !isQuickTap && !isTextMarkup && !isMediaVote;
+  feedMasonryOn = feedMasonryApplies && !!session.feed_masonry;
   updateFeedMasonryIndicator();
 
   document.getElementById('results-heading').textContent =
@@ -4392,8 +4396,10 @@ document.addEventListener('keydown', (e) => {
   const tag = document.activeElement && document.activeElement.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA') return;
   if (!currentSession || screens.sessionView.classList.contains('hidden')) return;
-  const isPlainTextSession = !currentSession.quick_tap_enabled && !currentSession.guided_categories && !currentSession.text_markup_enabled && !currentSession.media_vote_enabled && !currentSession.running_order_enabled;
-  if (!isPlainTextSession) return;
+  // Layout, not grouping — applies to any friction_pool-based feed (plain
+  // or guided), unlike G which needs more than one category to matter.
+  const hasFrictionPoolFeed = !currentSession.quick_tap_enabled && !currentSession.text_markup_enabled && !currentSession.media_vote_enabled && !currentSession.running_order_enabled;
+  if (!hasFrictionPoolFeed) return;
   e.preventDefault();
   toggleFeedMasonry();
 });
