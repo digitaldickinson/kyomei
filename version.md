@@ -8,11 +8,34 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.13**
+**Current version: 2.3.15**
 
 ---
 
 ## Log
+
+### 2.3.15 — 2026-09-21 — **schema**
+Security review fix: every anon-facing read policy (11 across `sessions`, `session_categories`,
+`friction_pool`, `quick_tap_options`/`quick_tap_responses`, `text_markup_prompts`/
+`text_markup_responses`, `media_vote_responses`/`media_transport_events`, `ranking_items`/
+`ranking_submissions`) now also requires the parent session to not be archived. Full "session code
+is a real access boundary" enforcement isn't achievable without moving reads behind RPCs, which
+breaks Realtime delivery to anon clients unless the whole live-sync architecture is redesigned
+alongside it — out of scope here. This bounds exposure instead: any anonymous client could
+previously enumerate every session (and read its categories/responses/results) ever created, with
+no code required at all; now that stops the moment a session is archived. New migration
+`migrations/006_archive_anon_read_gate.sql`; `friction_pool_schema.sql` updated to match across all
+11 policies.
+
+### 2.3.14 — 2026-09-21 — **schema**
+Security review fix: `text_markup_responses` no longer grants `anon` `SELECT` on `device_id` —
+Postgres column-level privileges layered on top of the existing row-level policy, restricting
+`anon` to exactly the columns the app uses (confirmed: `kyomei-display.html` only ever selects
+`spans`). Closes the other half of the update-lockdown fix from 2.3.12 — even with that raw-REST
+bypass closed, a `device_id` leaked via a revealed session's read could still be used to impersonate
+that device through the legitimate RPC, since it trusts whatever `device_id` it's given.
+`authenticated` (admin) access is unaffected. New migration
+`migrations/005_text_markup_device_id_lockdown.sql`.
 
 ### 2.3.13 — 2026-09-21
 Security review fix: all three pages had the real Supabase project URL and anon key hardcoded, so
