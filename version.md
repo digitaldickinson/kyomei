@@ -8,11 +8,22 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.11**
+**Current version: 2.3.12**
 
 ---
 
 ## Log
+
+### 2.3.12 — 2026-09-21 — **schema**
+Security review fix: removed `text_markup_responses`' anon UPDATE policy (`using (true) with check
+(true)`) — the one table in the schema with a genuinely unrestricted write policy, unlike every
+other anon-writable table (insert-only, or RPC-gated with no raw grant at all, same as ranking).
+The app's real write path (`submit_text_markup_response()`) is a security-definer upsert and was
+never gated by this policy either way — removing it only closes a direct-REST-API bypass: any anon
+client could previously overwrite any row for any `device_id` without going through the RPC or app
+at all. New migration `migrations/004_text_markup_update_lockdown.sql`; `friction_pool_schema.sql`
+updated to match, and its stale "trust model note" (which had described the wide-open policy as an
+accepted trade-off) corrected.
 
 ### 2.3.11 — 2026-09-21
 Each app page's `CONFIG` comment block (`kyomei-admin.html`, `kyomei.html`, `kyomei-display.html`)
