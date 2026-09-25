@@ -6,9 +6,10 @@ a display view projects live results for the room.
 
 ## Pages
 
-- **`kyomei.html`** — student view. Submits responses to a session in one of
-  several modes: free-text response, guided scenario, passage highlighting
-  (text markup), or quick-tap multiple choice.
+- **`index.html`** — holding page for the site root.
+- **`kyomei.html`** — student view. Submits responses to a session in any of
+  the session types below: free-text response (optionally guided), quick-tap
+  buttons, passage highlighting (text markup), Media Vote, or Running Order.
 - **`kyomei-admin.html`** — teacher console. Create and manage sessions,
   configure categories and prompts, and watch responses come in live.
 - **`kyomei-display.html`** — read-only display view for projecting live
@@ -48,17 +49,21 @@ Every session is exactly one of these, set at creation:
 
 Loaded via CDN `<script>` tags, no build step or package manager:
 
-- **[`@supabase/supabase-js`](https://github.com/supabase/supabase-js) v2.116.0** — all three pages. Database reads/writes and Realtime channel subscriptions.
+- **[`@supabase/supabase-js`](https://github.com/supabase/supabase-js) v2.116.0** — `kyomei.html`, `kyomei-admin.html` and `kyomei-display.html`. Database reads/writes and Realtime channel subscriptions.
 - **[`qrcodejs`](https://github.com/davidshimjs/qrcodejs) v1.0.0** — `kyomei-display.html` only. Renders the join QR code.
 - **Kaltura Player (PlayKit JS)** — `kyomei-display.html` only, loaded dynamically at runtime (not a static `<script>` tag) the first time a Media Vote session's video source is `mmutube`. Uses the Dynamic Embed pattern (`KalturaPlayer.setup()`), not the non-programmable iframe embed.
+
+`kyomei-presenter.html` loads no libraries.
 
 ## Backend
 
 Data is stored in [Supabase](https://supabase.com) (via `@supabase/supabase-js`),
-using tables such as `sessions`, `session_categories`, `friction_pool`,
-`quick_tap_options`, `quick_tap_responses`, `text_markup_prompts`, and
-`text_markup_responses`. Real-time updates are delivered through Supabase
-channel subscriptions.
+with one `sessions` table and per-type tables for each session type's
+configuration and responses (for example `friction_pool` for text responses,
+`quick_tap_responses`, `text_markup_responses`, `media_vote_responses`, and the
+`ranking_*` tables for Running Order). The full schema is in
+[`migrations/`](migrations/README.md). Real-time updates are delivered through
+Supabase channel subscriptions.
 
 ## Running locally
 
