@@ -2,7 +2,8 @@
 
 For tutors running live sessions from **`kyomei-admin.html`** (the staff console). Students respond
 from **`kyomei.html`**; **`kyomei-display.html`** is the read-only view you project for the room.
-`index.html` is a launcher page linking to all three.
+`index.html` is a launcher page linking to all three. **`kyomei-presenter.html`** is an optional
+presentation display that switches the projector between your Google Slides and an activity — see §8.
 
 ---
 
@@ -279,3 +280,67 @@ Once results are revealed, **Space** cycles the aggregate view:
 The student page distinguishes connection state from submission receipt: **Sending…**, **Received.**, or a failure message. Offline work is not automatically submitted when connectivity returns. If receipt is not confirmed, check the connection before retrying.
 
 Unfinished text, highlights for each prompt, and ranking order are saved in the browser. Refreshing restores these drafts in the same round. A tutor reset starts a new round and ignores old drafts. Submitted rankings are restored as submitted rather than reopening an editable blank order. Browser storage restrictions can prevent drafts surviving a page reload.
+
+## 8. Presenting with Google Slides
+
+The **Presentation** panel at the top of Admin (on the session list and inside a session) lets one
+projector window switch between a published Google Slides deck and a Kyomei activity, without
+reloading the deck or opening another window. You can collapse the panel by clicking its heading.
+
+**Setup — same computer, same browser.** Admin and the presentation display must be open in the
+same Chrome profile on the same computer (separate monitors are fine). A second device, another
+browser profile, or an incognito window can't control it. Switching happens inside the browser, so
+it doesn't depend on the network; the deck and student responses still do.
+
+### Publishing and loading a deck
+
+1. In Google Slides: **File → Share → Publish to web → Publish**. Copy the link from the **Link** tab
+   (or the `https://…` address inside the **Embed** code — not the whole `<iframe …>` code).
+2. Paste it into **Published Google Slides link** and click **Load deck**. An ordinary edit or
+   sharing link is refused with instructions; it can't be shown on the projector.
+3. Click **Open presentation display ↗** and drag that window to the projector. Make it fullscreen
+   there (Chrome: View → Enter Full Screen, or ⌃⌘F on a Mac).
+
+The last deck you loaded is remembered in this browser for your login. **Replace deck** loads a
+different one; **Remove deck** takes it off the projector (after a confirmation). Kyomei never
+remembers which slide you were on.
+
+If your university limits publishing to its own users, the projector's browser must be signed in
+to that Google account. **Open deck separately ↗** opens the published deck in its own tab: if it
+won't load there either, the deck's publishing settings are the problem, not Kyomei.
+
+### Switching during a class
+
+- **The selected activity is the session you last opened in Admin.** Opening a different session
+  prepares it; if slides are showing they stay showing. If the activity is showing, the projector
+  moves to the newly opened session.
+- **Show slides / Show activity** switch the projector. The highlighted button is the view you
+  selected; the status line underneath says whether the display has **confirmed** it. "Projector
+  confirmed" means the Kyomei display applied the change — it can't tell whether Google finished
+  drawing the deck.
+- **Advance slides in the display window, not in Admin.** Clicker and arrow keys go to whichever
+  window you last clicked. After **Show slides**, click once on the slides on the projector before
+  advancing. Returning to the slides keeps your place.
+- Switching views never opens/closes submissions, reveals results, resets anything or changes the
+  selected prompt. Responses keep arriving while slides are showing, and your other session
+  controls (reveal, L, G, M, Space, Media Vote transport) work exactly as before.
+- **Pause media before switching.** Hiding a view doesn't stop its sound — pause any video in your
+  slides, and pause a Media Vote clip before showing slides. Switching never pauses or seeks the
+  Media Vote clip for you, because that would change its vote timeline.
+- The join QR code (**L**) appears on the activity view only, not over your slides.
+
+### Closing, refreshing and reopening
+
+- **Refreshing Admin** reconnects to the same presentation display automatically.
+- **Closing Admin** leaves the projector showing whatever it was showing, with a small "Kyomei Admin
+  disconnected" note. A newly opened Admin tab can't take over that window: close it and use **Open
+  presentation display** from the new Admin tab.
+- **Duplicating the Admin tab** gives the copy its own, separate pairing — it can't control the
+  original tab's display.
+- **Refreshing the display** reloads the deck from its first slide and asks Admin for the current
+  view; if Admin isn't open it shows a waiting screen.
+- **Deleting or archiving the selected session** clears it: the projector falls back to the slides,
+  or the waiting screen if no deck is loaded.
+- The existing **Open display ↗** button on each session is unchanged and still opens that one
+  activity on its own.
+

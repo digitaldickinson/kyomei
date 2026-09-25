@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>kyomei — Presentation display</title>
+<style>
+  :root {
+    --bg: #14151a;
+    --panel: #1f2128;
+    --border: #34384a;
+    --text: #f2f2f5;
+    --muted: #9a9db0;
+    --accent: #5b8cff;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+  }
+  .hidden { display: none !important; }
+
+  /* Every layer stays laid out at full size. Inactive layers use
+     visibility (not display:none) so neither Google's player nor the
+     activity page is resized to zero and reflowed on every switch. */
+  .layer { position: fixed; inset: 0; }
+  .layer.is-hidden { visibility: hidden; }
+  .layer iframe { display: block; width: 100%; height: 100%; border: 0; }
+  #slides-layer { background: #000; }
+
+  #waiting-layer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4vw;
+    text-align: center;
+  }
+  #waiting-layer svg { width: clamp(64px, 8vw, 110px); height: auto; margin-bottom: 12px; }
+  #waiting-layer h1 { font-size: clamp(2rem, 4vw, 3.5rem); margin: 0 0 12px; }
+  #waiting-message { color: var(--muted); font-size: clamp(1.1rem, 2vw, 1.6rem); max-width: 40em; margin: 0; }
+
+  .control-status {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 10;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<div id="slides-layer" class="layer is-hidden" aria-hidden="true" inert></div>
+<div id="activity-layer" class="layer is-hidden" aria-hidden="true" inert></div>
+<div id="waiting-layer" class="layer">
+  <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
+    <circle cx="24" cy="32" r="16" stroke="#5b8cff" stroke-width="5"/>
+    <circle cx="40" cy="32" r="16" stroke="#5b8cff" stroke-width="5" opacity="0.45"/>
+  </svg>
+  <h1>kyomei</h1>
+  <p id="waiting-message" role="status">Waiting for Kyomei Admin…</p>
+</div>
+<div id="control-status" class="control-status hidden" role="status"></div>
+
+<script>
+// Presentation display: a Google Slides layer and an activity layer (the
+// unchanged kyomei-display.html in an iframe), switched by the paired
+// Admin tab over a same-browser BroadcastChannel. This page holds no
+// Supabase client and writes nothing — see Admin's "Presentation" section
+// for the protocol owner.
+const PRESENTER_PROTOCOL = 1;
+const params = new URLSearchParams(window.location.search);
+const pair = params.get('pair');
+const slidesLayer = document.getElementById('slides-layer');
+const activityLayer = document.getElementById('activity-layer');
+const waitingLayer = document.getElementById('waiting-layer');
+const waitingMessage = document.getElementById('waiting-message');
+const controlStatus = document.getElementById('control-status');
+
+let appliedRevision = 0;
+let applied = { deckUrl: null, view: null, activity: null };
+let hasState = false;
+let deckFrame = null;
+let activityFrame = null;
+let channel = null;
+
+// Identical copy in kyomei-admin.html (tests/presenter.test.cjs checks
+// they agree). Accepts only published decks and always rebuilds the URL
+// from the deck ID, so nothing else from the pasted text reaches the iframe.
+function parseSlidesDeckUrl(input) {
+  const text = String(input || '').trim();
+  if (!text) return { ok: false, error: 'Paste a published Google Slides link.' };
+  if (text.startsWith('<')) {
+    return { ok: false, error: 'That looks like embed code. Paste just the link — use the Link tab in Publish to web, or copy the https://… address from inside src="…".' };
+  }
+  let url;
+  try { url = new URL(text); } catch (e) {
+    return { ok: false, error: 'That isn’t a web address. Paste the link from Google Slides → File → Share → Publish to web.' };
+  }
+  if (url.protocol !== 'https:' || url.hostname !== 'docs.google.com' || url.port || url.username || url.password) {
+    return { ok: false, error: 'Only published Google Slides links (https://docs.google.com/presentation/d/e/…) can be loaded.' };
+  }
+  const published = url.pathname.match(/^\/presentation\/d\/e\/([A-Za-z0-9_-]+)\/(?:embed|pub)$/);
+  if (published) {
+    const base = 'https://docs.google.com/presentation/d/e/' + published[1];
+    return { ok: true, embedUrl: base + '/embed?start=false&loop=false', pubUrl: base + '/pub?start=false&loop=false' };
+  }
+  if (/^\/presentation\/(?:u\/\d+\/)?d\/[A-Za-z0-9_-]+/.test(url.pathname)) {
+    return { ok: false, error: 'This is an edit or sharing link, which can’t be shown on the projector. In Google Slides choose File → Share → Publish to web, publish the deck, and paste the link it gives you.' };
+  }
+  return { ok: false, error: 'That isn’t a published Google Slides link. In Google Slides choose File → Share → Publish to web and paste the link it gives you.' };
+}
+
+// Identical copy in kyomei-admin.html.
+function isValidPresenterState(state) {
+  if (!state || typeof state !== 'object') return false;
+  if (state.deckUrl !== null) {
+    const parsed = parseSlidesDeckUrl(state.deckUrl);
+    if (!parsed.ok || parsed.embedUrl !== state.deckUrl) return false;
+  }
+  if (state.view !== null && state.view !== 'slides' && state.view !== 'activity') return false;
+  const activity = state.activity;
+  if (activity !== null) {
+    if (!activity || typeof activity !== 'object') return false;
+    if (typeof activity.id !== 'string' && typeof activity.id !== 'number') return false;
+    if (typeof activity.code !== 'string' || !activity.code || activity.code.length > 200) return false;
+    if (typeof activity.name !== 'string') return false;
+  }
+  return true;
+}
+
+// 'apply' a newer snapshot, 'reack' a repeated/stale one (so a refreshed
+// Admin still gets a confirmation), or 'ignore' anything malformed, from
+// another pairing, or not addressed to the display.
+function presenterMessageDecision(appliedRevision, message, pair) {
+  if (!message || typeof message !== 'object') return 'ignore';
+  if (message.protocol !== PRESENTER_PROTOCOL || message.pair !== pair) return 'ignore';
+  if (message.type === 'admin-bye') return 'admin-bye';
+  if (message.type !== 'state') return 'ignore';
+  if (!Number.isFinite(message.revision) || message.revision <= 0) return 'ignore';
+  if (!isValidPresenterState(message.state)) return 'ignore';
+  return message.revision > appliedRevision ? 'apply' : 'reack';
+}
+
+function resolvePresenterView(state) {
+  if (state.view === 'slides' && state.deckUrl) return 'slides';
+  if (state.view === 'activity' && state.activity) return 'activity';
+  return 'waiting';
+}
+
+function setLayerVisible(layer, visible) {
+  layer.classList.toggle('is-hidden', !visible);
+  layer.inert = !visible;
+  layer.setAttribute('aria-hidden', String(!visible));
+}
+
+function applyDeck(deckUrl) {
+  if (deckUrl === applied.deckUrl) return;
+  if (deckFrame) deckFrame.remove();
+  deckFrame = null;
+  if (!deckUrl) return;
+  deckFrame = document.createElement('iframe');
+  deckFrame.title = 'Google Slides presentation';
+  deckFrame.allowFullscreen = true;
+  deckFrame.setAttribute('allow', 'fullscreen');
+  deckFrame.src = deckUrl;
+  slidesLayer.appendChild(deckFrame);
+}
+
+function applyActivity(activity) {
+  const code = activity ? activity.code : null;
+  const currentCode = applied.activity ? applied.activity.code : null;
+  if (code === currentCode) return;
+  // A fresh iframe per activity: unloading the old document closes its
+  // realtime channels, so nothing accumulates across activity changes.
+  if (activityFrame) activityFrame.remove();
+  activityFrame = null;
+  if (!activity) return;
+  const url = new URL('kyomei-display.html', window.location.href);
+  url.searchParams.set('session', activity.code);
+  activityFrame = document.createElement('iframe');
+  activityFrame.title = 'Kyomei activity: ' + activity.name;
+  activityFrame.allowFullscreen = true;
+  activityFrame.setAttribute('allow', 'autoplay; fullscreen');
+  activityFrame.src = url.toString();
+  activityLayer.appendChild(activityFrame);
+}
+
+function applyState(state) {
+  const previousView = resolvePresenterView(applied);
+  applyDeck(state.deckUrl);
+  applyActivity(state.activity);
+  applied = state;
+  hasState = true;
+  const view = resolvePresenterView(state);
+  setLayerVisible(slidesLayer, view === 'slides');
+  setLayerVisible(activityLayer, view === 'activity');
+  setLayerVisible(waitingLayer, view === 'waiting');
+  if (view === 'waiting') waitingMessage.textContent = 'Nothing selected to show yet.';
+  // Hand keyboard/clicker input to the deck when it comes back. This only
+  // takes effect while this window itself has focus — see the Admin panel.
+  if (view === 'slides' && previousView !== 'slides' && deckFrame) deckFrame.focus();
+  return view;
+}
+
+function post(message) {
+  try { channel.postMessage({ protocol: PRESENTER_PROTOCOL, pair, ...message }); } catch (e) { /* channel closed */ }
+}
+
+function showControlStatus(text) {
+  controlStatus.textContent = text;
+  controlStatus.classList.toggle('hidden', !text);
+}
+
+function init() {
+  if (!pair || !/^[a-f0-9]{32}$/.test(pair)) {
+    waitingMessage.textContent = 'Open this display from the Presentation panel in Kyomei Admin.';
+    return;
+  }
+  if (typeof BroadcastChannel !== 'function') {
+    waitingMessage.textContent = 'This browser can’t be controlled from Kyomei Admin. Use a current version of Chrome.';
+    return;
+  }
+  channel = new BroadcastChannel('kyomei-presenter-' + pair);
+  channel.addEventListener('message', event => {
+    const message = event.data;
+    const decision = presenterMessageDecision(appliedRevision, message, pair);
+    if (decision === 'admin-bye') {
+      showControlStatus('Kyomei Admin disconnected');
+      return;
+    }
+    if (decision === 'ignore') return;
+    showControlStatus('');
+    if (decision === 'apply') {
+      appliedRevision = message.revision;
+      applyState(message.state);
+    }
+    post({ type: 'ack', revision: appliedRevision, view: resolvePresenterView(applied) });
+  });
+  window.addEventListener('pagehide', () => post({ type: 'bye' }));
+  post({ type: 'ready' });
+  setTimeout(() => {
+    if (!hasState) waitingMessage.textContent = 'Kyomei Admin isn’t responding. Use Open presentation display in Admin’s Presentation panel.';
+  }, 3000);
+}
+
+init();
+</script>
+</body>
+</html>

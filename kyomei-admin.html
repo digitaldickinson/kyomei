@@ -180,6 +180,22 @@
   .pulse-check-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
   .top-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
 
+  /* ---- Presentation (Google Slides) panel ---- */
+  .presenter-panel { padding: 14px 20px; }
+  .presenter-panel > summary { cursor: pointer; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .presenter-panel > summary h2 { margin: 0; font-size: 18px; display: inline; }
+  .presenter-body { margin-top: 12px; display: grid; gap: 10px; }
+  .presenter-body p { margin: 0; }
+  .presenter-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .presenter-row input { flex: 1 1 280px; width: auto; }
+  .presenter-row button { font-size: 13px; padding: 8px 12px; white-space: nowrap; }
+  .presenter-switch button { font-size: 16px; padding: 12px 20px; }
+  .presenter-switch button[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .presenter-field-error { color: #ffb3ba; font-size: 13px; }
+  .presenter-note { color: var(--warning); font-size: 13px; }
+  .presenter-help ul { margin: 6px 0 0; padding-left: 20px; }
+  .presenter-help summary { cursor: pointer; }
+
   /* ---- New session form ---- */
   .category-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
   .category-chip {
@@ -553,6 +569,45 @@
   <div class="wrap">
     <div id="global-error" class="error-banner hidden"></div>
     <div id="connection-banner" class="connection-banner hidden">Reconnecting to live feed…</div>
+
+    <!-- ---- Presentation panel (shared by session list and live session view) ---- -->
+    <details id="presenter-panel" class="panel presenter-panel" open>
+      <summary><h2>Presentation</h2> <span class="muted" id="presenter-summary"></span></summary>
+      <div class="presenter-body">
+        <p id="presenter-unsupported" class="error-banner hidden">This browser can’t switch a projector between slides and activities. Use each session’s Open display button as usual.</p>
+        <div id="presenter-controls" class="presenter-body">
+          <div>
+            <label for="presenter-deck-input" class="muted">Published Google Slides link</label>
+            <div class="presenter-row">
+              <input id="presenter-deck-input" type="url" autocomplete="off" spellcheck="false" placeholder="https://docs.google.com/presentation/d/e/…/pub" aria-describedby="presenter-deck-help presenter-deck-error">
+              <button class="ghost" type="button" id="presenter-load-btn">Load deck</button>
+              <button class="ghost hidden" type="button" id="presenter-remove-btn">Remove deck</button>
+              <a class="muted hidden" id="presenter-open-deck-link" target="_blank" rel="noopener noreferrer">Open deck separately ↗</a>
+            </div>
+            <p class="muted" id="presenter-deck-help">In Google Slides: File → Share → Publish to web → Publish, then paste the link (Link tab, or the address inside the Embed code).</p>
+            <p class="presenter-field-error hidden" id="presenter-deck-error" role="alert"></p>
+          </div>
+          <div class="presenter-row presenter-switch" role="group" aria-label="Projector view">
+            <button class="ghost" type="button" id="presenter-show-slides-btn" aria-pressed="false">Show slides</button>
+            <button class="ghost" type="button" id="presenter-show-activity-btn" aria-pressed="false">Show activity</button>
+            <button class="ghost" type="button" id="presenter-open-display-btn">Open presentation display ↗</button>
+          </div>
+          <p>Activity: <strong id="presenter-activity-name">No activity selected</strong> <span class="muted">(the session you last opened)</span></p>
+          <p role="status" id="presenter-status"></p>
+          <p class="muted">Advance slides in the display window. Switch views here.</p>
+          <p class="muted">Clicker and arrow keys go to whichever window you last clicked — after Show slides, click once on the slides on the projector before advancing. Hiding a view doesn’t stop its sound: pause any video in your slides before switching.</p>
+          <p class="presenter-note hidden" id="presenter-mediavote-note">Media Vote: pause the clip before showing slides — switching views never pauses or seeks it.</p>
+          <details class="presenter-help muted">
+            <summary>Deck not showing?</summary>
+            <ul>
+              <li>The deck must be published (File → Share → Publish to web). An edit or sharing link won’t work.</li>
+              <li>If your organisation limits publishing to its own users, the projector browser must be signed in to that Google account.</li>
+              <li>Try Open deck separately — if it doesn’t load there either, the problem is with the deck’s publishing settings, not Kyomei.</li>
+            </ul>
+          </details>
+        </div>
+      </div>
+    </details>
 
     <!-- ---- Session list screen ---- -->
     <div id="session-list-screen">
@@ -1247,6 +1302,7 @@ let hasSeenSession = false;
 supabaseClient.auth.onAuthStateChange((event, session) => {
   if (session) {
     showAuthed();
+    presenterSetUser(session.user && session.user.id);
     if (!hasSeenSession) {
       hasSeenSession = true;
       showListScreen();
@@ -1364,6 +1420,7 @@ async function toggleArchiveSession(session) {
     showError('Could not update session: ' + error.message);
     return;
   }
+  if (newArchived) presenterClearActivity(session.id);
 
   // Depending on the current "Show archived" state, this session either
   // disappears, reappears, or just needs restyling to/from dimmed — a full
@@ -3285,6 +3342,7 @@ document.querySelectorAll('#mediavote-bucket-toggle button').forEach(btn => {
 async function enterSession(session) {
   teardownSessionView();
   currentSession = session;
+  presenterSelectActivity(session);
   const entryIsCurrent = beginViewRequest('enterSession');
   renderCollectionControl();
   stopAdminSession = watchSession(session.id, async row => {
@@ -3528,6 +3586,354 @@ document.getElementById('open-display-btn').addEventListener('click', () => {
   url.searchParams.set('session', currentSession.session_code);
   window.open(url.toString(), '_blank');
 });
+
+// ---------------- Presentation (Google Slides) display ----------------
+// Admin owns a small state snapshot — deck, selected view, selected
+// activity — and sends it to its paired kyomei-presenter.html window over
+// a same-browser BroadcastChannel. None of this touches Supabase: activity
+// state, responses, reveal and media transport keep their existing paths.
+// Pairing (sessionStorage) survives an Admin refresh; a duplicated tab
+// detects the original and takes a fresh pairing instead of sharing it.
+const PRESENTER_PROTOCOL = 1;
+const PRESENTER_SESSION_KEY = 'kyomei.presenter';
+const PRESENTER_CONFIRM_TIMEOUT_MS = 3000;
+const PRESENTER_PROBE_MS = 500;
+const presenterSupported = typeof BroadcastChannel === 'function';
+const presenterInstance = randomPresenterId();
+let presenterPair = null;
+let presenterChannel = null;
+let presenterReady = false;
+let presenterRevision = 0;
+let presenterState = { deckUrl: null, view: null, activity: null };
+let presenterUserId = null;
+let presenterDisplay = 'none'; // 'none' | 'connected' | 'closed'
+let presenterConfirmed = null; // { revision, view } from the display's last ack
+let presenterUnconfirmed = false;
+let presenterConfirmTimer = null;
+let presenterWindow = null;
+
+function randomPresenterId() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Identical copy in kyomei-presenter.html (tests/presenter.test.cjs checks
+// they agree). Accepts only published decks and always rebuilds the URL
+// from the deck ID, so nothing else from the pasted text reaches the iframe.
+function parseSlidesDeckUrl(input) {
+  const text = String(input || '').trim();
+  if (!text) return { ok: false, error: 'Paste a published Google Slides link.' };
+  if (text.startsWith('<')) {
+    return { ok: false, error: 'That looks like embed code. Paste just the link — use the Link tab in Publish to web, or copy the https://… address from inside src="…".' };
+  }
+  let url;
+  try { url = new URL(text); } catch (e) {
+    return { ok: false, error: 'That isn’t a web address. Paste the link from Google Slides → File → Share → Publish to web.' };
+  }
+  if (url.protocol !== 'https:' || url.hostname !== 'docs.google.com' || url.port || url.username || url.password) {
+    return { ok: false, error: 'Only published Google Slides links (https://docs.google.com/presentation/d/e/…) can be loaded.' };
+  }
+  const published = url.pathname.match(/^\/presentation\/d\/e\/([A-Za-z0-9_-]+)\/(?:embed|pub)$/);
+  if (published) {
+    const base = 'https://docs.google.com/presentation/d/e/' + published[1];
+    return { ok: true, embedUrl: base + '/embed?start=false&loop=false', pubUrl: base + '/pub?start=false&loop=false' };
+  }
+  if (/^\/presentation\/(?:u\/\d+\/)?d\/[A-Za-z0-9_-]+/.test(url.pathname)) {
+    return { ok: false, error: 'This is an edit or sharing link, which can’t be shown on the projector. In Google Slides choose File → Share → Publish to web, publish the deck, and paste the link it gives you.' };
+  }
+  return { ok: false, error: 'That isn’t a published Google Slides link. In Google Slides choose File → Share → Publish to web and paste the link it gives you.' };
+}
+
+// Identical copy in kyomei-presenter.html.
+function isValidPresenterState(state) {
+  if (!state || typeof state !== 'object') return false;
+  if (state.deckUrl !== null) {
+    const parsed = parseSlidesDeckUrl(state.deckUrl);
+    if (!parsed.ok || parsed.embedUrl !== state.deckUrl) return false;
+  }
+  if (state.view !== null && state.view !== 'slides' && state.view !== 'activity') return false;
+  const activity = state.activity;
+  if (activity !== null) {
+    if (!activity || typeof activity !== 'object') return false;
+    if (typeof activity.id !== 'string' && typeof activity.id !== 'number') return false;
+    if (typeof activity.code !== 'string' || !activity.code || activity.code.length > 200) return false;
+    if (typeof activity.name !== 'string') return false;
+  }
+  return true;
+}
+
+// Wall-clock based so a refreshed Admin (or one whose sessionStorage was
+// unavailable) still outranks everything the display has already applied.
+function nextPresenterRevision(last) {
+  return Math.max(last + 1, Date.now());
+}
+
+// The switching-semantics table from the build prompt, as a pure function.
+function presenterReduce(state, action) {
+  switch (action.type) {
+    case 'load-deck':
+      return { ...state, deckUrl: action.deckUrl };
+    case 'remove-deck':
+      return { ...state, deckUrl: null, view: state.view === 'slides' ? (state.activity ? 'activity' : null) : state.view };
+    case 'show':
+      if (action.view === 'slides' && !state.deckUrl) return state;
+      if (action.view === 'activity' && !state.activity) return state;
+      return { ...state, view: action.view };
+    case 'select-activity':
+      return { ...state, activity: action.activity };
+    case 'clear-activity':
+      if (!state.activity || state.activity.id !== action.id) return state;
+      return { ...state, activity: null, view: state.view === 'activity' ? (state.deckUrl ? 'slides' : null) : state.view };
+    default:
+      return state;
+  }
+}
+
+function savePresenterSession() {
+  try {
+    sessionStorage.setItem(PRESENTER_SESSION_KEY, JSON.stringify({ pair: presenterPair, revision: presenterRevision, state: presenterState }));
+  } catch (e) { /* storage unavailable: pairing just won't survive a refresh */ }
+}
+
+function presenterDeckStorageKey() {
+  return presenterUserId ? 'kyomei.presenter.deck.' + presenterUserId : null;
+}
+
+function savePresenterDeck() {
+  const key = presenterDeckStorageKey();
+  if (!key) return;
+  try {
+    if (presenterState.deckUrl) localStorage.setItem(key, presenterState.deckUrl);
+    else localStorage.removeItem(key);
+  } catch (e) { /* storage unavailable */ }
+}
+
+function postPresenter(message) {
+  if (!presenterChannel) return false;
+  try {
+    presenterChannel.postMessage({ protocol: PRESENTER_PROTOCOL, pair: presenterPair, ...message });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function sendPresenterState() {
+  if (!presenterReady) return;
+  clearTimeout(presenterConfirmTimer);
+  presenterUnconfirmed = !postPresenter({ type: 'state', revision: presenterRevision, state: presenterState });
+  if (!presenterUnconfirmed && presenterDisplay === 'connected') {
+    presenterConfirmTimer = setTimeout(() => {
+      presenterUnconfirmed = true;
+      renderPresenterPanel();
+    }, PRESENTER_CONFIRM_TIMEOUT_MS);
+  }
+}
+
+function commitPresenterState(next) {
+  if (JSON.stringify(next) === JSON.stringify(presenterState)) return;
+  const deckChanged = next.deckUrl !== presenterState.deckUrl;
+  presenterState = next;
+  presenterRevision = nextPresenterRevision(presenterRevision);
+  savePresenterSession();
+  if (deckChanged) savePresenterDeck();
+  sendPresenterState();
+  renderPresenterPanel();
+}
+
+function presenterSelectActivity(session) {
+  if (!presenterSupported) return;
+  // Same precedence as enterSession() / the display's mode detection.
+  const mediaVote = !!session.media_vote_enabled && !session.running_order_enabled && !session.quick_tap_enabled && !session.text_markup_enabled;
+  commitPresenterState(presenterReduce(presenterState, {
+    type: 'select-activity',
+    activity: { id: session.id, code: session.session_code, name: session.name, mediaVote },
+  }));
+}
+
+function presenterClearActivity(sessionId) {
+  if (!presenterSupported) return;
+  commitPresenterState(presenterReduce(presenterState, { type: 'clear-activity', id: sessionId }));
+}
+
+function presenterSetUser(userId) {
+  if (!presenterSupported || userId === presenterUserId) return;
+  presenterUserId = userId;
+  if (presenterState.deckUrl) return;
+  let saved = null;
+  try { saved = localStorage.getItem(presenterDeckStorageKey()); } catch (e) { /* storage unavailable */ }
+  const parsed = parseSlidesDeckUrl(saved);
+  if (!saved || !parsed.ok) return;
+  commitPresenterState(presenterReduce(presenterState, { type: 'load-deck', deckUrl: parsed.embedUrl }));
+  document.getElementById('presenter-deck-input').value = parsed.pubUrl;
+}
+
+function presenterViewLabel(view) {
+  if (view === 'slides') return 'Slides';
+  if (view === 'activity') return 'Activity';
+  return 'Waiting screen';
+}
+
+function renderPresenterPanel() {
+  const supported = presenterSupported;
+  document.getElementById('presenter-unsupported').classList.toggle('hidden', supported);
+  document.getElementById('presenter-controls').classList.toggle('hidden', !supported);
+  if (!supported) {
+    document.getElementById('presenter-summary').textContent = 'Not available in this browser';
+    return;
+  }
+  const s = presenterState;
+  const deck = s.deckUrl ? parseSlidesDeckUrl(s.deckUrl) : null;
+  document.getElementById('presenter-load-btn').textContent = s.deckUrl ? 'Replace deck' : 'Load deck';
+  document.getElementById('presenter-remove-btn').classList.toggle('hidden', !s.deckUrl);
+  const deckLink = document.getElementById('presenter-open-deck-link');
+  deckLink.classList.toggle('hidden', !deck);
+  if (deck) deckLink.href = deck.pubUrl;
+  else deckLink.removeAttribute('href');
+
+  const slidesBtn = document.getElementById('presenter-show-slides-btn');
+  const activityBtn = document.getElementById('presenter-show-activity-btn');
+  slidesBtn.disabled = !s.deckUrl;
+  activityBtn.disabled = !s.activity;
+  slidesBtn.setAttribute('aria-pressed', String(s.view === 'slides'));
+  activityBtn.setAttribute('aria-pressed', String(s.view === 'activity'));
+
+  document.getElementById('presenter-activity-name').textContent = s.activity ? s.activity.name : 'No activity selected';
+  document.getElementById('presenter-mediavote-note').classList.toggle('hidden', !(s.activity && s.activity.mediaVote));
+
+  const selected = s.view === 'slides' ? 'Slides' : s.view === 'activity' ? 'Activity' : 'Nothing';
+  let display;
+  if (presenterDisplay === 'none') display = 'No presentation display open.';
+  else if (presenterDisplay === 'closed') display = 'The presentation display was closed.';
+  else if (presenterConfirmed && presenterConfirmed.revision === presenterRevision) display = 'Projector confirmed: ' + presenterViewLabel(presenterConfirmed.view) + '.';
+  else if (presenterUnconfirmed) display = 'The display hasn’t confirmed the last change — is it still open?';
+  else display = 'Waiting for the display to confirm…';
+  document.getElementById('presenter-status').textContent = 'Selected display view: ' + selected + '. ' + display;
+  document.getElementById('presenter-summary').textContent =
+    (s.deckUrl ? 'Deck loaded' : 'No deck') + ' · ' + (presenterDisplay === 'connected' ? 'display open' : 'no display');
+}
+
+function handlePresenterMessage(event) {
+  const message = event.data;
+  if (!message || typeof message !== 'object') return;
+  if (message.protocol !== PRESENTER_PROTOCOL || message.pair !== presenterPair) return;
+  if (message.type === 'admin-probe') {
+    if (presenterReady && message.instance !== presenterInstance) postPresenter({ type: 'admin-present', instance: presenterInstance });
+    return;
+  }
+  if (message.type === 'ready') {
+    presenterDisplay = 'connected';
+    presenterConfirmed = null;
+    sendPresenterState();
+  } else if (message.type === 'ack') {
+    if (!Number.isFinite(message.revision) || !['slides', 'activity', 'waiting'].includes(message.view)) return;
+    presenterDisplay = 'connected';
+    presenterConfirmed = { revision: message.revision, view: message.view };
+    if (message.revision === presenterRevision) {
+      clearTimeout(presenterConfirmTimer);
+      presenterUnconfirmed = false;
+    }
+  } else if (message.type === 'bye') {
+    presenterDisplay = 'closed';
+    presenterConfirmed = null;
+    clearTimeout(presenterConfirmTimer);
+  } else {
+    return;
+  }
+  renderPresenterPanel();
+}
+
+function openPresenterChannel(pair) {
+  if (presenterChannel) presenterChannel.close();
+  presenterPair = pair;
+  presenterChannel = new BroadcastChannel('kyomei-presenter-' + pair);
+  presenterChannel.addEventListener('message', handlePresenterMessage);
+}
+
+function initPresenter() {
+  if (!presenterSupported) { renderPresenterPanel(); return; }
+  let saved = null;
+  try { saved = JSON.parse(sessionStorage.getItem(PRESENTER_SESSION_KEY)); } catch (e) { /* storage unavailable */ }
+  const finish = () => {
+    presenterReady = true;
+    savePresenterSession();
+    sendPresenterState();
+    renderPresenterPanel();
+  };
+  if (!saved || typeof saved.pair !== 'string' || !/^[a-f0-9]{32}$/.test(saved.pair)) {
+    openPresenterChannel(randomPresenterId());
+    finish();
+    return;
+  }
+  if (isValidPresenterState(saved.state)) presenterState = saved.state;
+  presenterRevision = Number.isFinite(saved.revision) ? saved.revision : 0;
+  openPresenterChannel(saved.pair);
+  // A duplicated tab inherits sessionStorage, pairing included. If the
+  // original Admin is still alive it answers this probe, and this copy
+  // takes a fresh pairing rather than becoming a second controller.
+  let duplicate = false;
+  const probeListener = event => {
+    const m = event.data;
+    if (m && m.type === 'admin-present' && m.pair === presenterPair && m.instance !== presenterInstance) duplicate = true;
+  };
+  presenterChannel.addEventListener('message', probeListener);
+  postPresenter({ type: 'admin-probe', instance: presenterInstance });
+  renderPresenterPanel();
+  setTimeout(() => {
+    presenterChannel.removeEventListener('message', probeListener);
+    if (duplicate) openPresenterChannel(randomPresenterId());
+    finish();
+  }, PRESENTER_PROBE_MS);
+}
+
+function openPresenterDisplay() {
+  if (!presenterReady) return;
+  const url = new URL('kyomei-presenter.html', window.location.href);
+  url.searchParams.set('pair', presenterPair);
+  // Opening by name with an empty URL finds this pairing's window without
+  // navigating it (which would reload the deck); only a fresh, blank
+  // window gets pointed at the presentation display.
+  let win = presenterWindow && !presenterWindow.closed ? presenterWindow : window.open('', 'kyomei-presenter-' + presenterPair);
+  if (!win) {
+    showError('The browser blocked the display window — allow pop-ups for this site and try again.');
+    return;
+  }
+  let blank = true;
+  try { blank = win.location.href === 'about:blank'; } catch (e) { /* not ours: navigate it */ }
+  if (blank) win.location.href = url.toString();
+  presenterWindow = win;
+  win.focus();
+}
+
+document.getElementById('presenter-load-btn').addEventListener('click', () => {
+  const input = document.getElementById('presenter-deck-input');
+  const errorEl = document.getElementById('presenter-deck-error');
+  const parsed = parseSlidesDeckUrl(input.value);
+  errorEl.textContent = parsed.ok ? '' : parsed.error;
+  errorEl.classList.toggle('hidden', parsed.ok);
+  if (!parsed.ok) { input.focus(); return; }
+  input.value = parsed.pubUrl;
+  commitPresenterState(presenterReduce(presenterState, { type: 'load-deck', deckUrl: parsed.embedUrl }));
+});
+document.getElementById('presenter-remove-btn').addEventListener('click', () => {
+  if (!window.confirm('Remove the deck from the projector? You can load it again from its link.')) return;
+  document.getElementById('presenter-deck-input').value = '';
+  commitPresenterState(presenterReduce(presenterState, { type: 'remove-deck' }));
+});
+document.getElementById('presenter-show-slides-btn').addEventListener('click', () => {
+  commitPresenterState(presenterReduce(presenterState, { type: 'show', view: 'slides' }));
+});
+document.getElementById('presenter-show-activity-btn').addEventListener('click', () => {
+  commitPresenterState(presenterReduce(presenterState, { type: 'show', view: 'activity' }));
+});
+document.getElementById('presenter-open-display-btn').addEventListener('click', openPresenterDisplay);
+window.addEventListener('pagehide', () => postPresenter({ type: 'admin-bye' }));
+initPresenter();
+{
+  const deck = presenterState.deckUrl && parseSlidesDeckUrl(presenterState.deckUrl);
+  if (deck && deck.ok) document.getElementById('presenter-deck-input').value = deck.pubUrl;
+}
 
 document.getElementById('refresh-session-btn').addEventListener('click', async () => {
   if (!currentSession) return;
@@ -4016,6 +4422,7 @@ document.getElementById('delete-confirm-btn').addEventListener('click', async ()
   }
 
   closeDeleteConfirm();
+  presenterClearActivity(session.id);
 
   const row = document.getElementById(`session-row-${session.id}`);
   if (row) row.remove();
