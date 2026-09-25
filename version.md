@@ -8,11 +8,23 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.4.0**
+**Current version: 2.5.0**
 
 ---
 
 ## Log
+
+### 2.5.0 — 2026-09-25
+Two more ways to switch the presentation display. `kyomei-presenter.html`: a Show slides / Show
+activity button in the lower-left corner, above Google's slide toolbar, hidden until the mouse is
+over that corner or moves over an activity (listener attached from the presenter page to the
+same-origin activity iframe; `kyomei-display.html` unchanged), fading out after 2.5 s. It sends a new
+protocol message `request-view {view}`; Admin applies it through the same reducer and broadcasts the
+snapshot, so Admin remains the only state owner. The button hides while Admin is disconnected or when
+there is nothing to switch to. `kyomei-admin.html`: large green **Slides** / blue **Session** tiles
+in the session view, mirroring Show slides / Show activity; fixed in the right margin at 1440px+ and
+a row above the session controls below that; shown only once a deck is loaded. Operator manual §8
+updated; button tests added to `tests/presenter.test.cjs`.
 
 ### 2.4.0 — 2026-09-25
 Google Slides display switching. New page `kyomei-presenter.html` holds a published Google Slides

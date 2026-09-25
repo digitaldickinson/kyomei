@@ -196,6 +196,38 @@
   .presenter-help ul { margin: 6px 0 0; padding-left: 20px; }
   .presenter-help summary { cursor: pointer; }
 
+  /* ---- Big Slides / Session switch tiles (session view, deck loaded) ----
+     Right-hand margin on wide screens, a row above the header otherwise. */
+  .presenter-tiles { display: flex; gap: 12px; margin-bottom: 16px; }
+  .presenter-tile {
+    flex: 1;
+    min-height: 88px;
+    border-radius: 18px;
+    border: 3px solid transparent;
+    color: #fff;
+    font-size: 26px;
+    font-weight: 700;
+    opacity: 0.7;
+    transition: opacity 0.15s ease, border-color 0.15s ease;
+  }
+  .presenter-tile.slides { background: #6f9f57; }
+  .presenter-tile.session { background: var(--accent); }
+  .presenter-tile:hover:not(:disabled) { opacity: 0.9; }
+  .presenter-tile[aria-pressed="true"] { opacity: 1; border-color: #fff; }
+  .presenter-tile:disabled { opacity: 0.2; }
+  .presenter-tile:focus-visible { outline: 3px solid var(--text); outline-offset: 3px; }
+  @media (min-width: 1440px) {
+    .presenter-tiles {
+      position: fixed;
+      top: 240px;
+      left: calc(50% + 480px + 24px);
+      width: 200px;
+      flex-direction: column;
+      gap: 24px;
+    }
+    .presenter-tile { min-height: 160px; font-size: 30px; }
+  }
+
   /* ---- New session form ---- */
   .category-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
   .category-chip {
@@ -763,6 +795,10 @@
 
     <!-- ---- Live session view ---- -->
     <div id="session-view-screen" class="hidden">
+      <div class="presenter-tiles hidden" id="presenter-tiles" role="group" aria-label="Projector view">
+        <button type="button" class="presenter-tile slides" id="presenter-tile-slides" aria-pressed="false">Slides</button>
+        <button type="button" class="presenter-tile session" id="presenter-tile-session" aria-pressed="false">Session</button>
+      </div>
       <div class="top-row">
         <button class="ghost" id="back-to-list-from-session-btn">&larr; All sessions</button>
         <div class="session-row-actions">
@@ -3798,6 +3834,15 @@ function renderPresenterPanel() {
   activityBtn.disabled = !s.activity;
   slidesBtn.setAttribute('aria-pressed', String(s.view === 'slides'));
   activityBtn.setAttribute('aria-pressed', String(s.view === 'activity'));
+  // The big tiles mirror the two Show buttons; they only appear once a
+  // deck is loaded, so no-deck use of the session view is unchanged.
+  document.getElementById('presenter-tiles').classList.toggle('hidden', !s.deckUrl);
+  const slidesTile = document.getElementById('presenter-tile-slides');
+  const sessionTile = document.getElementById('presenter-tile-session');
+  slidesTile.disabled = slidesBtn.disabled;
+  sessionTile.disabled = activityBtn.disabled;
+  slidesTile.setAttribute('aria-pressed', String(s.view === 'slides'));
+  sessionTile.setAttribute('aria-pressed', String(s.view === 'activity'));
 
   document.getElementById('presenter-activity-name').textContent = s.activity ? s.activity.name : 'No activity selected';
   document.getElementById('presenter-mediavote-note').classList.toggle('hidden', !(s.activity && s.activity.mediaVote));
@@ -3834,6 +3879,12 @@ function handlePresenterMessage(event) {
       clearTimeout(presenterConfirmTimer);
       presenterUnconfirmed = false;
     }
+  } else if (message.type === 'request-view') {
+    // The display's corner button asks; Admin decides, so there is still
+    // one owner of the state. presenterReduce ignores unavailable views.
+    if (message.view !== 'slides' && message.view !== 'activity') return;
+    presenterDisplay = 'connected';
+    commitPresenterState(presenterReduce(presenterState, { type: 'show', view: message.view }));
   } else if (message.type === 'bye') {
     presenterDisplay = 'closed';
     presenterConfirmed = null;
@@ -3925,6 +3976,12 @@ document.getElementById('presenter-show-slides-btn').addEventListener('click', (
   commitPresenterState(presenterReduce(presenterState, { type: 'show', view: 'slides' }));
 });
 document.getElementById('presenter-show-activity-btn').addEventListener('click', () => {
+  commitPresenterState(presenterReduce(presenterState, { type: 'show', view: 'activity' }));
+});
+document.getElementById('presenter-tile-slides').addEventListener('click', () => {
+  commitPresenterState(presenterReduce(presenterState, { type: 'show', view: 'slides' }));
+});
+document.getElementById('presenter-tile-session').addEventListener('click', () => {
   commitPresenterState(presenterReduce(presenterState, { type: 'show', view: 'activity' }));
 });
 document.getElementById('presenter-open-display-btn').addEventListener('click', openPresenterDisplay);
