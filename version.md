@@ -14,6 +14,12 @@ Update this file with each change that ships — bump the version, add an entry 
 
 ## Log
 
+### README.md — 2026-09-25 (docs only, no version bump)
+Brought the README up to date: `index.html` listed as the holding page, the student page now names
+all session types (Media Vote and Running Order were missing), supabase-js lists the three pages that
+actually load it (and notes `kyomei-presenter.html` loads none), and the Backend section describes the
+per-type tables and links to `migrations/` for the full schema instead of a partial table list.
+
 ### 2.5.3 — 2026-09-25
 Layout: the Admin **Slides** / **Session** tiles now sit in a row directly below the session header
 panel at every screen width, replacing the fixed right-margin column (1440px+) and the row above
