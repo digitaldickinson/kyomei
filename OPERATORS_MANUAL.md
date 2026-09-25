@@ -314,6 +314,16 @@ won't load there either, the deck's publishing settings are the problem, not Kyo
 - **The selected activity is the session you last opened in Admin.** Opening a different session
   prepares it; if slides are showing they stay showing. If the activity is showing, the projector
   moves to the newly opened session.
+- **Slides / Session tiles.** Once a deck is loaded, a session shows two large buttons — green
+  **Slides** and blue **Session** — in the right-hand margin (or above the session controls on a
+  narrower screen). They do the same as Show slides / Show activity; the one with the white outline
+  is the view you selected.
+- **Switching from the display window.** Move the mouse to the lower-left corner of the projector
+  window (just above Google's slide controls) and a **Show activity** / **Show slides** button fades
+  in; it also appears whenever the mouse moves over an activity, and fades out after a couple of
+  seconds. It asks Admin to switch, so it only appears while Admin is connected. Using it keeps the
+  keyboard on the display window: once you've clicked the slides at the start of class, your
+  clicker keeps working after you switch back to them with this button.
 - **Show slides / Show activity** switch the projector. The highlighted button is the view you
   selected; the status line underneath says whether the display has **confirmed** it. "Projector
   confirmed" means the Kyomei display applied the change — it can't tell whether Google finished
@@ -343,4 +353,3 @@ won't load there either, the deck's publishing settings are the problem, not Kyo
   or the waiting screen if no deck is loaded.
 - The existing **Open display ↗** button on each session is unchanged and still opens that one
   activity on its own.
-

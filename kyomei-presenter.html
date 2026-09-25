@@ -56,6 +56,34 @@
     padding: 6px 14px;
     font-size: 13px;
   }
+
+  /* Switch button: invisible until the mouse is near it (or over an
+     activity), so the audience doesn't see it. Sits above Google's own
+     bottom toolbar, which occupies the lower-left corner of the deck. */
+  .switch-zone {
+    position: fixed;
+    left: 0;
+    bottom: 44px;
+    z-index: 10;
+    padding: 16px;
+  }
+  .switch-btn {
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+    background: rgba(31, 33, 40, 0.92);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 16px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+  }
+  .switch-zone:hover .switch-btn,
+  .switch-btn:focus-visible,
+  .switch-btn.is-revealed { opacity: 1; }
+  .switch-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -71,6 +99,9 @@
   <p id="waiting-message" role="status">Waiting for Kyomei Admin…</p>
 </div>
 <div id="control-status" class="control-status hidden" role="status"></div>
+<div id="switch-zone" class="switch-zone hidden">
+  <button type="button" id="switch-btn" class="switch-btn"></button>
+</div>
 
 <script>
 // Presentation display: a Google Slides layer and an activity layer (the
@@ -86,6 +117,9 @@ const activityLayer = document.getElementById('activity-layer');
 const waitingLayer = document.getElementById('waiting-layer');
 const waitingMessage = document.getElementById('waiting-message');
 const controlStatus = document.getElementById('control-status');
+const switchZone = document.getElementById('switch-zone');
+const switchBtn = document.getElementById('switch-btn');
+const SWITCH_REVEAL_MS = 2500;
 
 let appliedRevision = 0;
 let applied = { deckUrl: null, view: null, activity: null };
@@ -93,6 +127,8 @@ let hasState = false;
 let deckFrame = null;
 let activityFrame = null;
 let channel = null;
+let adminConnected = false;
+let switchRevealTimer = null;
 
 // Identical copy in kyomei-admin.html (tests/presenter.test.cjs checks
 // they agree). Accepts only published decks and always rebuilds the URL
@@ -158,6 +194,28 @@ function resolvePresenterView(state) {
   return 'waiting';
 }
 
+// What the corner button would switch to, or null if there's nothing to
+// switch to. The display only asks — Admin decides and sends a snapshot.
+function presenterSwitchTarget(state) {
+  const view = resolvePresenterView(state);
+  if (view === 'slides') return state.activity ? 'activity' : null;
+  if (view === 'activity') return state.deckUrl ? 'slides' : null;
+  if (state.deckUrl) return 'slides';
+  return state.activity ? 'activity' : null;
+}
+
+function renderSwitchButton() {
+  const target = adminConnected ? presenterSwitchTarget(applied) : null;
+  switchZone.classList.toggle('hidden', !target);
+  if (target) switchBtn.textContent = target === 'slides' ? 'Show slides' : 'Show activity';
+}
+
+function revealSwitchButton() {
+  switchBtn.classList.add('is-revealed');
+  clearTimeout(switchRevealTimer);
+  switchRevealTimer = setTimeout(() => switchBtn.classList.remove('is-revealed'), SWITCH_REVEAL_MS);
+}
+
 function setLayerVisible(layer, visible) {
   layer.classList.toggle('is-hidden', !visible);
   layer.inert = !visible;
@@ -193,6 +251,11 @@ function applyActivity(activity) {
   activityFrame.allowFullscreen = true;
   activityFrame.setAttribute('allow', 'autoplay; fullscreen');
   activityFrame.src = url.toString();
+  // Same-origin, so the corner button can also appear when the mouse moves
+  // over an activity without kyomei-display.html knowing about it.
+  activityFrame.addEventListener('load', () => {
+    try { activityFrame.contentWindow.addEventListener('mousemove', revealSwitchButton); } catch (e) { /* not reachable */ }
+  });
   activityLayer.appendChild(activityFrame);
 }
 
@@ -237,17 +300,26 @@ function init() {
     const decision = presenterMessageDecision(appliedRevision, message, pair);
     if (decision === 'admin-bye') {
       showControlStatus('Kyomei Admin disconnected');
+      adminConnected = false;
+      renderSwitchButton();
       return;
     }
     if (decision === 'ignore') return;
     showControlStatus('');
+    adminConnected = true;
     if (decision === 'apply') {
       appliedRevision = message.revision;
       applyState(message.state);
     }
+    renderSwitchButton();
     post({ type: 'ack', revision: appliedRevision, view: resolvePresenterView(applied) });
   });
   window.addEventListener('pagehide', () => post({ type: 'bye' }));
+  document.addEventListener('mousemove', revealSwitchButton);
+  switchBtn.addEventListener('click', () => {
+    const target = presenterSwitchTarget(applied);
+    if (target) post({ type: 'request-view', view: target });
+  });
   post({ type: 'ready' });
   setTimeout(() => {
     if (!hasState) waitingMessage.textContent = 'Kyomei Admin isn’t responding. Use Open presentation display in Admin’s Presentation panel.';
