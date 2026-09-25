@@ -13,6 +13,10 @@ a display view projects live results for the room.
   configure categories and prompts, and watch responses come in live.
 - **`kyomei-display.html`** — read-only display view for projecting live
   session results.
+- **`kyomei-presenter.html`** — presentation display. Switches the projector
+  between a published Google Slides deck and the selected activity (shown
+  through `kyomei-display.html`), controlled from Admin's Presentation panel
+  in the same browser. Opened from Admin, not directly.
 
 ## Session types
 
@@ -58,13 +62,13 @@ channel subscriptions.
 
 ## Running locally
 
-These are static HTML files with no build step. Serve all four HTML pages together over HTTPS using GitHub Pages, Netlify, or another static host. For local development, use a localhost HTTP server rather than opening the files directly.
+These are static HTML files with no build step. Serve all five HTML pages together over HTTPS using GitHub Pages, Netlify, or another static host. For local development, use a localhost HTTP server rather than opening the files directly.
 
 ## Deploying your own copy
 
 `main` is a public template — `SUPABASE_URL`/`SUPABASE_ANON_KEY` are placeholders, and each page
 refuses to start (with a clear message) until they're filled in. See [migrations/README.md](migrations/README.md)
-for the complete setup guide and [first-install SQL](migrations/first_install.sql), then edit the `CONFIG` block near the top of each page's `<script>`.
+for the complete setup guide and [first-install SQL](migrations/first_install.sql), then edit the `CONFIG` block near the top of each page's `<script>`. (`kyomei-presenter.html` has no `CONFIG` block — it never talks to Supabase.)
 
 This project's own live deployment keeps its real credentials on a separate `live` branch rather
 than on `main`, since GitHub Pages serves whatever branch it's pointed at directly — that's what

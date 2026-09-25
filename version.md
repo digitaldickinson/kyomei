@@ -8,11 +8,31 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.3.22**
+**Current version: 2.4.0**
 
 ---
 
 ## Log
+
+### 2.4.0 — 2026-09-25
+Google Slides display switching. New page `kyomei-presenter.html` holds a published Google Slides
+deck and the selected activity (the unchanged `kyomei-display.html?session=…` in an iframe) as two
+full-size layers; the inactive one is `visibility:hidden`, `inert` and `aria-hidden`, and the deck
+iframe is only created or re-pointed when the deck URL itself changes. New collapsible
+**Presentation** panel in `kyomei-admin.html` (above the session list and session view): load /
+replace / remove a published deck, Show slides / Show activity, Open presentation display, the
+selected activity (= the session last opened in Admin) and a selected-vs-confirmed status line.
+Control is local only — Admin and display in the same Chrome profile on one computer, over a
+`BroadcastChannel` named `kyomei-presenter-<pair>`; no Supabase reads, writes or migration.
+Protocol v1: Admin sends complete `state` snapshots (`deckUrl`, `view`, `activity`) with a
+wall-clock-monotonic `revision`; the display validates and applies newer revisions, re-acks stale
+ones, ignores anything malformed or from another pair, replies `ack {revision, view}`, and sends
+`ready` on load and `bye` on close. Admin sends `admin-bye` on close. Pairing lives in
+sessionStorage so an Admin refresh reconnects; a duplicated tab probes for the original
+(`admin-probe`/`admin-present`) and takes a fresh pairing. The last deck is kept in localStorage
+per signed-in tutor. Deck links are accepted only as `https://docs.google.com/presentation/d/e/…/
+{embed|pub}` and rebuilt as `…/embed?start=false&loop=false`. Archiving or deleting the selected
+session clears the selection. New `tests/presenter.test.cjs`. Operator manual §8 and README updated.
 
 ### 2.3.22 — 2026-09-21 (**schema**)
 Bug fix: migration 007 added a composite foreign key (`session_id` + category/option/prompt id)
