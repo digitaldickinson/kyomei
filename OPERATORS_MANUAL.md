@@ -300,6 +300,8 @@ it doesn't depend on the network; the deck and student responses still do.
    sharing link is refused with instructions; it can't be shown on the projector.
 3. Click **Open presentation display ↗** and drag that window to the projector. Make it fullscreen
    there (Chrome: View → Enter Full Screen, or ⌃⌘F on a Mac).
+4. Click **Show slides** in Admin. Loading a deck prepares it; the “Deck ready” message reminds you
+   to select it for display.
 
 The last deck you loaded is remembered in this browser for your login. **Replace deck** loads a
 different one; **Remove deck** takes it off the projector (after a confirmation). Kyomei never
@@ -315,8 +317,8 @@ won't load there either, the deck's publishing settings are the problem, not Kyo
   prepares it; if slides are showing they stay showing. If the activity is showing, the projector
   moves to the newly opened session.
 - **Slides / Session tiles.** Once a deck is loaded, a session shows two large buttons — green
-  **Slides** and blue **Session** — in the right-hand margin (or above the session controls on a
-  narrower screen). They do the same as Show slides / Show activity; the one with the white outline
+  **Slides** and blue **Session** — directly below the session's name and keyboard-shortcuts panel.
+  They do the same as Show slides / Show activity; the one with the white outline
   is the view you selected.
 - **Switching from the display window.** Move the mouse to the lower-left corner of the projector
   window (just above Google's slide controls) and a **Show activity** / **Show slides** button fades
