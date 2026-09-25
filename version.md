@@ -8,11 +8,27 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.5.0**
+**Current version: 2.5.3**
 
 ---
 
 ## Log
+
+### 2.5.3 — 2026-09-25
+Layout: the Admin **Slides** / **Session** tiles now sit in a row directly below the session header
+panel at every screen width, replacing the fixed right-margin column (1440px+) and the row above
+the session controls. Operator manual §8 updated. No schema changes.
+
+### 2.5.2 — 2026-09-25
+Remove the publishing-link helper and slide advancement/clicker instructions from the Admin
+Presentation panel. Remove the input’s reference to the deleted helper. No schema changes.
+
+### 2.5.1 — 2026-09-25
+Fix presentation state carrying over between signed-in tutors: session snapshots now record their
+owner, restore only after authentication resolves, and clear the activity/view on account changes
+or sign-out while retaining each tutor's saved deck preference. Initialize a positive revision so
+an empty presentation display can connect before any content is selected. Add “Deck ready — click
+Show slides” guidance when a loaded deck is not selected. No schema changes.
 
 ### 2.5.0 — 2026-09-25
 Two more ways to switch the presentation display. `kyomei-presenter.html`: a Show slides / Show

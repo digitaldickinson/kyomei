@@ -197,7 +197,7 @@
   .presenter-help summary { cursor: pointer; }
 
   /* ---- Big Slides / Session switch tiles (session view, deck loaded) ----
-     Right-hand margin on wide screens, a row above the header otherwise. */
+     A row directly below the session header. */
   .presenter-tiles { display: flex; gap: 12px; margin-bottom: 16px; }
   .presenter-tile {
     flex: 1;
@@ -216,17 +216,6 @@
   .presenter-tile[aria-pressed="true"] { opacity: 1; border-color: #fff; }
   .presenter-tile:disabled { opacity: 0.2; }
   .presenter-tile:focus-visible { outline: 3px solid var(--text); outline-offset: 3px; }
-  @media (min-width: 1440px) {
-    .presenter-tiles {
-      position: fixed;
-      top: 240px;
-      left: calc(50% + 480px + 24px);
-      width: 200px;
-      flex-direction: column;
-      gap: 24px;
-    }
-    .presenter-tile { min-height: 160px; font-size: 30px; }
-  }
 
   /* ---- New session form ---- */
   .category-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
@@ -611,12 +600,11 @@
           <div>
             <label for="presenter-deck-input" class="muted">Published Google Slides link</label>
             <div class="presenter-row">
-              <input id="presenter-deck-input" type="url" autocomplete="off" spellcheck="false" placeholder="https://docs.google.com/presentation/d/e/…/pub" aria-describedby="presenter-deck-help presenter-deck-error">
+              <input id="presenter-deck-input" type="url" autocomplete="off" spellcheck="false" placeholder="https://docs.google.com/presentation/d/e/…/pub" aria-describedby="presenter-deck-error">
               <button class="ghost" type="button" id="presenter-load-btn">Load deck</button>
               <button class="ghost hidden" type="button" id="presenter-remove-btn">Remove deck</button>
               <a class="muted hidden" id="presenter-open-deck-link" target="_blank" rel="noopener noreferrer">Open deck separately ↗</a>
             </div>
-            <p class="muted" id="presenter-deck-help">In Google Slides: File → Share → Publish to web → Publish, then paste the link (Link tab, or the address inside the Embed code).</p>
             <p class="presenter-field-error hidden" id="presenter-deck-error" role="alert"></p>
           </div>
           <div class="presenter-row presenter-switch" role="group" aria-label="Projector view">
@@ -626,8 +614,7 @@
           </div>
           <p>Activity: <strong id="presenter-activity-name">No activity selected</strong> <span class="muted">(the session you last opened)</span></p>
           <p role="status" id="presenter-status"></p>
-          <p class="muted">Advance slides in the display window. Switch views here.</p>
-          <p class="muted">Clicker and arrow keys go to whichever window you last clicked — after Show slides, click once on the slides on the projector before advancing. Hiding a view doesn’t stop its sound: pause any video in your slides before switching.</p>
+          <p class="muted hidden" id="presenter-deck-ready" role="status">Deck ready — click Show slides to display it.</p>
           <p class="presenter-note hidden" id="presenter-mediavote-note">Media Vote: pause the clip before showing slides — switching views never pauses or seeks it.</p>
           <details class="presenter-help muted">
             <summary>Deck not showing?</summary>
@@ -795,10 +782,6 @@
 
     <!-- ---- Live session view ---- -->
     <div id="session-view-screen" class="hidden">
-      <div class="presenter-tiles hidden" id="presenter-tiles" role="group" aria-label="Projector view">
-        <button type="button" class="presenter-tile slides" id="presenter-tile-slides" aria-pressed="false">Slides</button>
-        <button type="button" class="presenter-tile session" id="presenter-tile-session" aria-pressed="false">Session</button>
-      </div>
       <div class="top-row">
         <button class="ghost" id="back-to-list-from-session-btn">&larr; All sessions</button>
         <div class="session-row-actions">
@@ -841,6 +824,10 @@
             <span class="shortcut-state" id="shortcut-state-space">Buttons</span>
           </div>
         </div>
+      </div>
+      <div class="presenter-tiles hidden" id="presenter-tiles" role="group" aria-label="Projector view">
+        <button type="button" class="presenter-tile slides" id="presenter-tile-slides" aria-pressed="false">Slides</button>
+        <button type="button" class="presenter-tile session" id="presenter-tile-session" aria-pressed="false">Session</button>
       </div>
 
       <div id="quicktap-heading-display" class="quicktap-heading-display hidden"></div>
@@ -1352,6 +1339,7 @@ supabaseClient.auth.onAuthStateChange((event, session) => {
     // from a genuine first sign-in).
   } else {
     hasSeenSession = false;
+    presenterSetUser(null);
     showLogin();
   }
 });
@@ -3642,6 +3630,8 @@ let presenterReady = false;
 let presenterRevision = 0;
 let presenterState = { deckUrl: null, view: null, activity: null };
 let presenterUserId = null;
+let presenterAuthResolved = false;
+let presenterSavedSession = null;
 let presenterDisplay = 'none'; // 'none' | 'connected' | 'closed'
 let presenterConfirmed = null; // { revision, view } from the display's last ack
 let presenterUnconfirmed = false;
@@ -3728,7 +3718,7 @@ function presenterReduce(state, action) {
 
 function savePresenterSession() {
   try {
-    sessionStorage.setItem(PRESENTER_SESSION_KEY, JSON.stringify({ pair: presenterPair, revision: presenterRevision, state: presenterState }));
+    sessionStorage.setItem(PRESENTER_SESSION_KEY, JSON.stringify({ pair: presenterPair, revision: presenterRevision, userId: presenterUserId, state: presenterState }));
   } catch (e) { /* storage unavailable: pairing just won't survive a refresh */ }
 }
 
@@ -3756,7 +3746,7 @@ function postPresenter(message) {
 }
 
 function sendPresenterState() {
-  if (!presenterReady) return;
+  if (!presenterReady || !presenterAuthResolved) return;
   clearTimeout(presenterConfirmTimer);
   presenterUnconfirmed = !postPresenter({ type: 'state', revision: presenterRevision, state: presenterState });
   if (!presenterUnconfirmed && presenterDisplay === 'connected') {
@@ -3794,15 +3784,33 @@ function presenterClearActivity(sessionId) {
 }
 
 function presenterSetUser(userId) {
-  if (!presenterSupported || userId === presenterUserId) return;
+  userId = userId || null;
+  if (!presenterSupported || (presenterAuthResolved && userId === presenterUserId)) return;
+  const restored = presenterSavedSession;
+  presenterSavedSession = null;
+  presenterAuthResolved = true;
   presenterUserId = userId;
-  if (presenterState.deckUrl) return;
-  let saved = null;
-  try { saved = localStorage.getItem(presenterDeckStorageKey()); } catch (e) { /* storage unavailable */ }
-  const parsed = parseSlidesDeckUrl(saved);
-  if (!saved || !parsed.ok) return;
-  commitPresenterState(presenterReduce(presenterState, { type: 'load-deck', deckUrl: parsed.embedUrl }));
-  document.getElementById('presenter-deck-input').value = parsed.pubUrl;
+  // Only an owned snapshot may restore the selected activity/view after refresh.
+  // Legacy snapshots have no owner; recover only this user's saved deck instead.
+  let next = { deckUrl: null, view: null, activity: null };
+  if (userId && restored && restored.userId === userId && isValidPresenterState(restored.state)) {
+    next = restored.state;
+  } else if (userId) {
+    let saved = null;
+    try { saved = localStorage.getItem(presenterDeckStorageKey()); } catch (e) { /* storage unavailable */ }
+    const parsed = parseSlidesDeckUrl(saved);
+    if (parsed.ok) next.deckUrl = parsed.embedUrl;
+  }
+  // Identity changes must be sent even when both accounts have an empty state.
+  // Do not write deck preferences here: signing out must not erase the saved deck.
+  presenterState = next;
+  presenterRevision = nextPresenterRevision(presenterRevision);
+  savePresenterSession();
+  sendPresenterState();
+  renderPresenterPanel();
+  const deck = next.deckUrl && parseSlidesDeckUrl(next.deckUrl);
+  document.getElementById('presenter-deck-input').value = deck ? deck.pubUrl : '';
+  document.getElementById('presenter-deck-error').classList.add('hidden');
 }
 
 function presenterViewLabel(view) {
@@ -3821,6 +3829,7 @@ function renderPresenterPanel() {
   }
   const s = presenterState;
   const deck = s.deckUrl ? parseSlidesDeckUrl(s.deckUrl) : null;
+  document.getElementById('presenter-deck-ready').classList.toggle('hidden', !deck || s.view === 'slides');
   document.getElementById('presenter-load-btn').textContent = s.deckUrl ? 'Replace deck' : 'Load deck';
   document.getElementById('presenter-remove-btn').classList.toggle('hidden', !s.deckUrl);
   const deckLink = document.getElementById('presenter-open-deck-link');
@@ -3908,7 +3917,8 @@ function initPresenter() {
   try { saved = JSON.parse(sessionStorage.getItem(PRESENTER_SESSION_KEY)); } catch (e) { /* storage unavailable */ }
   const finish = () => {
     presenterReady = true;
-    savePresenterSession();
+    presenterRevision = nextPresenterRevision(presenterRevision);
+    if (presenterAuthResolved) savePresenterSession();
     sendPresenterState();
     renderPresenterPanel();
   };
@@ -3917,7 +3927,7 @@ function initPresenter() {
     finish();
     return;
   }
-  if (isValidPresenterState(saved.state)) presenterState = saved.state;
+  presenterSavedSession = saved;
   presenterRevision = Number.isFinite(saved.revision) ? saved.revision : 0;
   openPresenterChannel(saved.pair);
   // A duplicated tab inherits sessionStorage, pairing included. If the
