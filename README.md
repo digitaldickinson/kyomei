@@ -63,7 +63,8 @@ configuration and responses (for example `friction_pool` for text responses,
 `quick_tap_responses`, `text_markup_responses`, `media_vote_responses`, and the
 `ranking_*` tables for Running Order). The full schema is in
 [`migrations/`](migrations/README.md). Real-time updates are delivered through
-Supabase channel subscriptions.
+Supabase channel subscriptions. Students subscribe only to response controls in
+`student_controls`; display-only session changes are kept off student subscriptions.
 
 ## Running locally
 

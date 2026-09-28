@@ -522,14 +522,20 @@ function releaseSubscription(channel, timer) {
 }
 // One lifecycle for session controls: subscribe, refresh after reconnect,
 // retry after interruption, and dispose without restarting a closed view.
-function watchSession(sessionId, onRow, onStatus = () => {}) {
+function watchStudentControls(sessionId, onRow, onStatus = () => {}) {
   let channel = null, timer = null, stopped = false, refreshSequence = 0;
   async function refresh() {
     const sequence = ++refreshSequence;
-    const { data, error } = await supabaseClient.from('sessions').select('*').eq('id', sessionId).maybeSingle();
+    const { data, error } = await supabaseClient.from('student_controls').select('*').eq('id', sessionId).maybeSingle();
     if (stopped || sequence !== refreshSequence) return;
     if (error) { onStatus(false); return; }
     if (data) { onStatus(true); await onRow(data, true); }
+    else {
+      onStatus(false);
+      if (currentSession) currentSession.submissions_open = false;
+      updateStudentAvailability();
+      document.getElementById('student-collection-status').textContent = 'This activity is unavailable. Refresh or ask your tutor for the current session.';
+    }
   }
   function connect() {
     if (stopped) return;
@@ -537,7 +543,7 @@ function watchSession(sessionId, onRow, onStatus = () => {}) {
     channel = null;
     if (previous) supabaseClient.removeChannel(previous);
     const next = supabaseClient.channel(`controls_${sessionId}_${Math.random().toString(36).slice(2)}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${sessionId}` }, async payload => {
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'student_controls', filter: `id=eq.${sessionId}` }, async payload => {
         if (stopped || channel !== next) return;
         ++refreshSequence; // a stale refresh must not undo a newer realtime row
         await onRow(payload.new);
@@ -656,13 +662,14 @@ async function applyStudentSession(row) {
     window.location.reload();
     return;
   }
-  currentSession = row;
+  // Controls are a small projection; retain the activity configuration loaded at join.
+  currentSession = { ...currentSession, ...row };
   updateStudentAvailability();
-  if (row.guided_categories) {
+  if (currentSession.guided_categories) {
     guidedActiveCategoryId = row.active_category_id || null;
     renderGuidedState();
   }
-  if (row.text_markup_enabled && textMarkupActivePromptId !== (row.active_prompt_id || null)) {
+  if (currentSession.text_markup_enabled && textMarkupActivePromptId !== (row.active_prompt_id || null)) {
     textMarkupActivePromptId = row.active_prompt_id || null;
     await renderTextMarkupState();
   }
@@ -717,7 +724,7 @@ async function init() {
   restoreTextDrafts();
   updateStudentAvailability();
   if (stopStudentSession) stopStudentSession();
-  stopStudentSession = watchSession(session.id, applyStudentSession, updateStudentConnection);
+  stopStudentSession = watchStudentControls(session.id, applyStudentSession, updateStudentConnection);
 }
 
 async function initTextResponse(session) {

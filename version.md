@@ -8,11 +8,19 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.5.3**
+**Current version: 2.5.4**
 
 ---
 
 ## Log
+
+### 2.5.4 — 2026-09-28 (**schema**)
+Separate student Realtime controls from the full session row. Migration 011 maintains a
+read-only student-controls projection transactionally, updating it only for response-relevant
+changes. Display settings, media transport and moderation feed revisions no longer notify
+student clients. Preserve initial activity configuration, drafts and reconnect refreshes.
+Apply migration 011 before publishing the student page; refresh existing student tabs.
+Admin, display and presenter pages are unchanged.
 
 ### README.md — 2026-09-25 (docs only, no version bump)
 Brought the README up to date: `index.html` listed as the holding page, the student page now names
