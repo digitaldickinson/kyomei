@@ -189,6 +189,13 @@
   .tap-btn-compact:active { filter: brightness(1.15); }
   .tap-btn-compact:disabled { opacity: 0.5; cursor: not-allowed; }
 
+  /* Quiz: one full-width button per option — answers are sentences more
+     often than single words, so the 2-column card grid would cramp them. */
+  .quiz-tap-list { grid-template-columns: 1fr; gap: 10px; }
+  .quiz-tap-list .tap-btn { display: flex; align-items: center; gap: 14px; text-align: left; padding: 16px; min-height: 64px; font-size: 17px; }
+  .quiz-tap-letter { width: 36px; height: 36px; border-radius: 10px; background: rgba(0,0,0,0.22); display: flex; align-items: center; justify-content: center; font-weight: 800; flex-shrink: 0; }
+  .quiz-position { color: var(--muted); font-size: 14px; margin-bottom: 6px; }
+
   .hidden-status {
     text-align: center;
     color: var(--muted);
@@ -426,6 +433,30 @@
     <div id="voted-status" class="hidden-status hidden">You've already voted on this device. Thanks!</div>
   </div>
 
+  <div id="quiz-screen" class="hidden">
+    <div class="brand-row">
+      <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
+        <circle cx="24" cy="32" r="16" stroke="#5b8cff" stroke-width="5"/>
+        <circle cx="40" cy="32" r="16" stroke="#5b8cff" stroke-width="5" opacity="0.45"/>
+      </svg>
+      <h1>kyomei</h1>
+    </div>
+    <div class="subtitle">Answer each question as your tutor shows it.</div>
+
+    <div class="session-name-header">Session: <strong id="quiz-session-name-display"></strong></div>
+
+    <div id="quiz-error-banner" class="status-banner error hidden" role="status" aria-live="polite"></div>
+
+    <div id="quiz-waiting-status" class="hidden-status hidden">Waiting for your tutor to start</div>
+
+    <div id="quiz-active" class="hidden">
+      <div class="quiz-position" id="quiz-position"></div>
+      <div class="quicktap-heading-display" id="quiz-prompt"></div>
+      <div class="tap-grid quiz-tap-list" id="quiz-tap-grid"></div>
+      <div id="quiz-answered-status" class="hidden-status hidden" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+
   <div id="mediavote-screen" class="hidden">
     <div class="brand-row">
       <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
@@ -599,7 +630,10 @@ function clearDraft(kind) { if (currentSession) safeStorage.removeItem(draftKey(
 function updateStudentAvailability() {
   const closed = currentSession && currentSession.submissions_open === false;
   document.getElementById('student-activity').disabled = !!closed;
-  document.getElementById('student-collection-status').textContent = closed ? 'Submissions are closed. Your draft is saved on this device.' : '';
+  const closedMessage = currentSession && currentSession.quiz_enabled
+    ? 'Answers are closed for this question.'
+    : 'Submissions are closed. Your draft is saved on this device.';
+  document.getElementById('student-collection-status').textContent = closed ? closedMessage : '';
 }
 function showStudentLoadError() {
   studentLoadFailed = true;
@@ -620,7 +654,8 @@ function submissionErrorMessage(error) {
   if (error.message === 'SUBMISSIONS_CLOSED') return 'Not sent — submissions are closed.';
   if (error.message === 'SESSION_ARCHIVED') return 'Not sent — this session has been archived.';
   if (error.message === 'SESSION_RESET') return 'The tutor reset this session. Refresh before submitting again.';
-  if (error.message === 'ALREADY_VOTED') return 'Already recorded from this device.';
+  if (error.message === 'ALREADY_VOTED' || error.code === '23505') return 'Already recorded from this device.';
+  if (error.message === 'QUESTION_NOT_ACTIVE') return 'Not sent — your tutor has moved to another question.';
   return 'Receipt not confirmed — check your connection before retrying.';
 }
 async function sendStudentRequest(operation) {
@@ -673,11 +708,15 @@ async function applyStudentSession(row) {
     textMarkupActivePromptId = row.active_prompt_id || null;
     await renderTextMarkupState();
   }
+  if (currentSession.quiz_enabled && quizActiveQuestionId !== (row.active_quiz_question_id || null)) {
+    quizActiveQuestionId = row.active_quiz_question_id || null;
+    renderQuizState();
+  }
 }
 
 
 function showScreen(id) {
-  ['loading-screen', 'invalid-session-screen', 'form-screen', 'quicktap-screen', 'guided-screen', 'textmarkup-screen', 'mediavote-screen', 'runningorder-screen'].forEach(s => {
+  ['loading-screen', 'invalid-session-screen', 'form-screen', 'quicktap-screen', 'guided-screen', 'textmarkup-screen', 'mediavote-screen', 'runningorder-screen', 'quiz-screen'].forEach(s => {
     document.getElementById(s).classList.toggle('hidden', s !== id);
   });
 }
@@ -712,6 +751,8 @@ async function init() {
 
   if (session.running_order_enabled) {
     await initRunningOrder(session);
+  } else if (session.quiz_enabled) {
+    await initQuiz(session);
   } else if (session.quick_tap_enabled) {
     await initQuickTap(session);
   } else if (session.text_markup_enabled) {
@@ -1423,6 +1464,100 @@ async function handleTap(optionId) {
   tapSuccessTimer = setTimeout(() => {
     successBanner.classList.add('hidden');
   }, 1500);
+}
+
+// ---------------- Quiz ----------------
+// Tap once per question; the device is then locked for that question in
+// this reset round (local lock + the database's unique key). Students are
+// never told whether they were right — that is shown on the display only.
+let quizQuestions = [];
+let quizOptions = [];
+let quizActiveQuestionId = null;
+let quizSubmitting = false;
+
+function quizLetter(index) { return String.fromCharCode(65 + index); }
+
+async function initQuiz(session) {
+  const [questions, options] = await Promise.all([
+    supabaseClient.from('quiz_questions').select('*').eq('session_id', session.id).order('sort_order', { ascending: true }),
+    supabaseClient.from('quiz_options').select('*').eq('session_id', session.id).order('sort_order', { ascending: true })
+  ]);
+  if (questions.error || options.error) { showStudentLoadError(); return; }
+  if (!questions.data || questions.data.length === 0) {
+    showScreen('invalid-session-screen');
+    return;
+  }
+  quizQuestions = questions.data;
+  quizOptions = options.data || [];
+  quizActiveQuestionId = session.active_quiz_question_id || null;
+  document.getElementById('quiz-session-name-display').textContent = session.name;
+  renderQuizState();
+  showScreen('quiz-screen');
+}
+
+function renderQuizState() {
+  const index = quizQuestions.findIndex(question => question.id === quizActiveQuestionId);
+  const question = quizQuestions[index];
+  document.getElementById('quiz-error-banner').classList.add('hidden');
+  document.getElementById('quiz-waiting-status').classList.toggle('hidden', !!question);
+  document.getElementById('quiz-active').classList.toggle('hidden', !question);
+  if (!question) return;
+
+  document.getElementById('quiz-position').textContent = `Question ${index + 1} of ${quizQuestions.length}`;
+  document.getElementById('quiz-prompt').textContent = question.prompt_text;
+  const grid = document.getElementById('quiz-tap-grid');
+  const answeredEl = document.getElementById('quiz-answered-status');
+  const answered = readDraft(`quiz_${question.id}`);
+  if (answered) {
+    grid.classList.add('hidden');
+    grid.innerHTML = '';
+    answeredEl.textContent = answered.letter
+      ? `Answer received (${answered.letter}) — watch the screen.`
+      : 'Answer already received from this device — watch the screen.';
+    answeredEl.classList.remove('hidden');
+    return;
+  }
+  answeredEl.classList.add('hidden');
+  grid.classList.remove('hidden');
+  grid.innerHTML = '';
+  quizOptions.filter(option => option.question_id === question.id).forEach((option, i) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tap-btn';
+    btn.style.backgroundColor = option.color || '#5b8cff';
+    btn.style.borderColor = option.color || '#5b8cff';
+    btn.innerHTML = `<span class="quiz-tap-letter">${quizLetter(i)}</span><span>${escapeHtml(option.label)}</span>`;
+    btn.addEventListener('click', () => handleQuizTap(question.id, option.id, quizLetter(i)));
+    grid.appendChild(btn);
+  });
+}
+
+async function handleQuizTap(questionId, optionId, letter) {
+  if (quizSubmitting) return;
+  quizSubmitting = true;
+  const errorBanner = document.getElementById('quiz-error-banner');
+  errorBanner.classList.add('hidden');
+  const buttons = document.querySelectorAll('#quiz-tap-grid button');
+  buttons.forEach(b => b.disabled = true);
+
+  const { error } = await sendStudentRequest(() => supabaseClient
+    .from('quiz_responses')
+    .insert({ session_id: currentSession.id, response_epoch: currentSession.response_epoch || 0, question_id: questionId, option_id: optionId, device_id: deviceId }));
+  quizSubmitting = false;
+
+  // A duplicate means this device already answered (e.g. storage was
+  // cleared): lock without claiming which option the database holds.
+  if (error && error.code === '23505') {
+    writeDraft(`quiz_${questionId}`, { option: null, letter: null });
+  } else if (error) {
+    buttons.forEach(b => b.disabled = false);
+    errorBanner.textContent = submissionErrorMessage(error);
+    errorBanner.classList.remove('hidden');
+    return;
+  } else {
+    writeDraft(`quiz_${questionId}`, { option: optionId, letter });
+  }
+  if (questionId === quizActiveQuestionId) renderQuizState();
 }
 
 // ---------------- Media Vote ----------------

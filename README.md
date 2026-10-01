@@ -9,7 +9,7 @@ a display view projects live results for the room.
 - **`index.html`** — holding page for the site root.
 - **`kyomei.html`** — student view. Submits responses to a session in any of
   the session types below: free-text response (optionally guided), quick-tap
-  buttons, passage highlighting (text markup), Media Vote, or Running Order.
+  buttons, passage highlighting (text markup), Media Vote, Running Order, or Quiz.
 - **`kyomei-admin.html`** — teacher console. Create and manage sessions,
   configure categories and prompts, and watch responses come in live.
 - **`kyomei-display.html`** — read-only display view for projecting live
@@ -44,6 +44,11 @@ Every session is exactly one of these, set at creation:
   aggregate — average final position, plus two oscillation views (move
   count and pairwise reversals) showing which stories caused the most
   back-and-forth.
+- **Quiz** — a tutor authors multiple-choice questions (2–6 options, one
+  correct) and runs them one at a time. Each device answers each question
+  once; the tutor then reveals the tally and the correct answer on the
+  display only. No scores or names — students' phones never show right or
+  wrong.
 
 ## JS libraries
 
@@ -60,8 +65,8 @@ Loaded via CDN `<script>` tags, no build step or package manager:
 Data is stored in [Supabase](https://supabase.com) (via `@supabase/supabase-js`),
 with one `sessions` table and per-type tables for each session type's
 configuration and responses (for example `friction_pool` for text responses,
-`quick_tap_responses`, `text_markup_responses`, `media_vote_responses`, and the
-`ranking_*` tables for Running Order). The full schema is in
+`quick_tap_responses`, `text_markup_responses`, `media_vote_responses`, the
+`ranking_*` tables for Running Order, and the `quiz_*` tables for Quiz). The full schema is in
 [`migrations/`](migrations/README.md). Real-time updates are delivered through
 Supabase channel subscriptions. Students subscribe only to response controls in
 `student_controls`; display-only session changes are kept off student subscriptions.
