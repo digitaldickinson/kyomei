@@ -504,6 +504,47 @@
   }
   .video-test-close-btn { position: absolute; top: 24px; right: 24px; }
 
+  /* ---- Quiz display ---- */
+  #quiz-display-screen { justify-content: flex-start; padding-top: 4vh; }
+  .quiz-display-question { width: 100%; max-width: 1300px; display: flex; flex-direction: column; }
+  .quiz-display-position { color: var(--muted); font-size: clamp(1rem, 1.6vw, 1.4rem); font-weight: 600; margin-bottom: 8px; }
+  .quiz-display-prompt { font-size: clamp(1.8rem, 3.6vw, 3.2rem); font-weight: 800; line-height: 1.2; margin-bottom: clamp(20px, 4vh, 40px); }
+  .quiz-display-options { display: flex; flex-direction: column; gap: clamp(12px, 2vh, 22px); text-align: left; }
+  .quiz-row {
+    display: flex;
+    align-items: center;
+    gap: clamp(14px, 2vw, 28px);
+    background: var(--panel);
+    border: 2px solid var(--border);
+    border-radius: 16px;
+    padding: clamp(12px, 2vh, 22px) clamp(16px, 2vw, 28px);
+    transition: opacity 0.4s ease, border-color 0.4s ease;
+  }
+  .quiz-letter {
+    width: clamp(44px, 5vw, 64px);
+    height: clamp(44px, 5vw, 64px);
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: clamp(1.3rem, 2.4vw, 2rem);
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .quiz-row-body { flex: 1; min-width: 0; }
+  .quiz-row-label { font-size: clamp(1.3rem, 2.4vw, 2.1rem); font-weight: 700; word-break: break-word; line-height: 1.2; }
+  .quiz-row-track { display: none; height: clamp(10px, 1.4vh, 16px); background: var(--panel-2); border-radius: 999px; overflow: hidden; margin-top: 10px; }
+  .quiz-row-fill { height: 100%; width: 0%; border-radius: 999px; transition: width 0.7s cubic-bezier(0.22, 1, 0.36, 1); }
+  .quiz-row-count { display: none; flex-shrink: 0; min-width: clamp(90px, 10vw, 150px); text-align: right; font-size: clamp(1.5rem, 2.8vw, 2.4rem); font-weight: 800; }
+  .quiz-row-count small { display: block; font-size: 0.5em; color: var(--muted); font-weight: 600; }
+  .quiz-display-options.stage-revealed .quiz-row-track,
+  .quiz-display-options.stage-revealed .quiz-row-count { display: block; }
+  .quiz-row.quiz-correct { border-color: var(--ok); }
+  .quiz-row.quiz-correct .quiz-row-label::after { content: ' ✓'; color: var(--ok); }
+  .quiz-row.quiz-dim { opacity: 0.4; }
+  .quiz-display-footer { margin-top: clamp(16px, 3vh, 32px); color: var(--muted); font-size: clamp(1.1rem, 1.8vw, 1.5rem); font-weight: 600; text-align: center; }
+
   /* ---- Running Order display ---- */
   .runningorder-display-view { display: flex; flex-direction: column; gap: 14px; max-height: 70vh; overflow-y: auto; width: 100%; }
   .runningorder-display-panels { display: flex; flex-wrap: wrap; gap: 24px; width: 100%; }
@@ -661,6 +702,17 @@
   </div>
 </div>
 
+<div id="quiz-display-screen" class="screen hidden">
+  <div class="quicktap-session-name" id="quiz-display-session-name"></div>
+  <div id="quiz-display-waiting" class="hidden-status-lg hidden">Waiting for the first question</div>
+  <div id="quiz-display-question" class="quiz-display-question hidden">
+    <div class="quiz-display-position" id="quiz-display-position"></div>
+    <div class="quiz-display-prompt" id="quiz-display-prompt"></div>
+    <div class="quiz-display-options" id="quiz-display-options"></div>
+    <div class="quiz-display-footer" id="quiz-display-footer" role="status"></div>
+  </div>
+</div>
+
 <div id="runningorder-display-screen" class="screen hidden">
   <div class="quicktap-session-name" id="runningorder-display-session-name"></div>
   <div id="runningorder-display-waiting-status" class="hidden-status-lg hidden">Collecting responses…</div>
@@ -800,7 +852,7 @@ function escapeHtml(str) {
 }
 
 function showScreen(id) {
-  ['loading-screen', 'invalid-session-screen', 'idle-screen', 'feed-screen', 'quicktap-display-screen', 'textmarkup-display-screen', 'mediavote-display-screen', 'runningorder-display-screen'].forEach(s => {
+  ['loading-screen', 'invalid-session-screen', 'idle-screen', 'feed-screen', 'quicktap-display-screen', 'textmarkup-display-screen', 'mediavote-display-screen', 'runningorder-display-screen', 'quiz-display-screen'].forEach(s => {
     document.getElementById(s).classList.toggle('hidden', s !== id);
   });
 }
@@ -866,7 +918,7 @@ function hideJoinInfoOverlay() {
 
 // ---------------- Bootstrap ----------------
 let currentSession = null;
-let displayMode = null; // 'plain' | 'guided' | 'quicktap' | 'textmarkup' | 'runningorder'
+let displayMode = null; // 'plain' | 'guided' | 'quicktap' | 'textmarkup' | 'runningorder' | 'quiz'
 let runningOrderItems = [];
 let rankingViewMode = null;
 let activeRankingTeamId = null;
@@ -896,6 +948,9 @@ async function init() {
   if (session.running_order_enabled) {
     displayMode = 'runningorder';
     await initRunningOrderDisplay(session);
+  } else if (session.quiz_enabled) {
+    displayMode = 'quiz';
+    await initQuizDisplay(session);
   } else if (session.quick_tap_enabled) {
     displayMode = 'quicktap';
     await initQuickTapDisplay(session);
@@ -2911,6 +2966,108 @@ document.getElementById('video-test-close-btn').addEventListener('click', () => 
   document.getElementById('video-test-overlay').classList.add('hidden');
 });
 
+// ---------------- Quiz display ----------------
+// Questions/options are public; counts and the correct option arrive only
+// through get_quiz_results(), which returns nothing until the tutor reveals.
+let quizQuestions = [];
+let quizOptions = [];
+let quizActiveQuestionId = null;
+let quizReveal = null; // null | 'tally' | 'answer'
+
+function quizLetter(index) { return String.fromCharCode(65 + index); }
+
+async function initQuizDisplay(session) {
+  const [questions, options] = await Promise.all([
+    supabaseClient.from('quiz_questions').select('*').eq('session_id', session.id).order('sort_order', { ascending: true }),
+    supabaseClient.from('quiz_options').select('*').eq('session_id', session.id).order('sort_order', { ascending: true })
+  ]);
+  if (questions.error || options.error || !questions.data || questions.data.length === 0) {
+    showScreen('invalid-session-screen');
+    return;
+  }
+  quizQuestions = questions.data;
+  quizOptions = options.data || [];
+  quizActiveQuestionId = session.active_quiz_question_id || null;
+  quizReveal = session.quiz_reveal || null;
+  document.getElementById('quiz-display-session-name').textContent = session.name;
+  showScreen('quiz-display-screen');
+  await renderQuizDisplayState();
+  setupSessionsSubscription();
+}
+
+function updateQuizFooter(total) {
+  const footer = document.getElementById('quiz-display-footer');
+  if (quizReveal) footer.textContent = `${total} answer${total === 1 ? '' : 's'}`;
+  else footer.textContent = currentSession.submissions_open === false ? 'Answers closed' : 'Answer on your device';
+}
+
+async function renderQuizDisplayState() {
+  const requestIsCurrent = beginViewRequest('quiz-display', () => currentSession && JSON.stringify([currentSession.id, quizActiveQuestionId, quizReveal]));
+  const index = quizQuestions.findIndex(question => question.id === quizActiveQuestionId);
+  const question = quizQuestions[index];
+  document.getElementById('quiz-display-waiting').classList.toggle('hidden', !!question);
+  document.getElementById('quiz-display-question').classList.toggle('hidden', !question);
+  if (!question) return;
+
+  document.getElementById('quiz-display-position').textContent = `Question ${index + 1} of ${quizQuestions.length}`;
+  document.getElementById('quiz-display-prompt').textContent = question.prompt_text;
+  const optionsEl = document.getElementById('quiz-display-options');
+  const options = quizOptions.filter(option => option.question_id === question.id);
+  if (optionsEl.dataset.questionId !== question.id) {
+    optionsEl.dataset.questionId = question.id;
+    optionsEl.innerHTML = options.map((option, i) => `
+      <div class="quiz-row" id="quiz-row-${option.id}">
+        <div class="quiz-letter" style="background:${option.color || '#5b8cff'}">${quizLetter(i)}</div>
+        <div class="quiz-row-body">
+          <div class="quiz-row-label">${escapeHtml(option.label)}</div>
+          <div class="quiz-row-track"><div class="quiz-row-fill" id="quiz-fill-${option.id}" style="background:${option.color || '#5b8cff'}"></div></div>
+        </div>
+        <div class="quiz-row-count" id="quiz-count-${option.id}"></div>
+      </div>
+    `).join('');
+  }
+
+  if (!quizReveal) {
+    optionsEl.classList.remove('stage-revealed');
+    for (const option of options) {
+      const row = document.getElementById(`quiz-row-${option.id}`);
+      row.classList.remove('quiz-correct', 'quiz-dim');
+      document.getElementById(`quiz-fill-${option.id}`).style.width = '0%';
+    }
+    updateQuizFooter(0);
+    return;
+  }
+
+  const { data, error } = await supabaseClient.rpc('get_quiz_results', { p_session_id: currentSession.id });
+  if (!requestIsCurrent()) return;
+  if (error) {
+    // Keep whatever is on screen rather than showing an empty tally.
+    console.error('get_quiz_results failed', error);
+    return;
+  }
+  const results = new Map((data || []).map(row => [row.option_id, row]));
+  const total = options.reduce((sum, option) => sum + Number((results.get(option.id) || {}).answer_count || 0), 0);
+  for (const option of options) {
+    const result = results.get(option.id) || {};
+    const count = Number(result.answer_count || 0);
+    const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+    document.getElementById(`quiz-count-${option.id}`).innerHTML = `${count}<small>${pct}%</small>`;
+    const row = document.getElementById(`quiz-row-${option.id}`);
+    row.classList.toggle('quiz-correct', result.is_correct === true);
+    row.classList.toggle('quiz-dim', result.is_correct === false);
+  }
+  optionsEl.classList.add('stage-revealed');
+  updateQuizFooter(total);
+  // Bars start at 0 and sweep to their share on the next frame.
+  requestAnimationFrame(() => {
+    for (const option of options) {
+      const count = Number((results.get(option.id) || {}).answer_count || 0);
+      const fill = document.getElementById(`quiz-fill-${option.id}`);
+      if (fill) fill.style.width = (total > 0 ? (count / total) * 100 : 0) + '%';
+    }
+  });
+}
+
 // ---------------- Running Order display ----------------
 // No dedicated realtime channel here — once results_revealed is true, the
 // RPCs enforce a hard stop on further moves/submissions (see
@@ -3287,6 +3444,23 @@ function setupSessionsSubscription() {
           // Cheap re-bucket of already-fetched data — no refetch needed
           // just because the slider moved.
           renderMediaVoteDisplayTimeline();
+        }
+      } else if (displayMode === 'quiz') {
+        const newActive = payload.new.active_quiz_question_id || null;
+        const newReveal = payload.new.quiz_reveal || null;
+        const stateChanged = newActive !== quizActiveQuestionId || newReveal !== quizReveal;
+        currentSession.submissions_open = payload.new.submissions_open;
+        quizActiveQuestionId = newActive;
+        quizReveal = newReveal;
+        currentSession.active_quiz_question_id = newActive;
+        currentSession.quiz_reveal = newReveal;
+        // A reconnect refresh refetches the tally too — answers may have
+        // changed while this screen was offline.
+        if (stateChanged || refreshed) {
+          await renderQuizDisplayState();
+      if (!updateIsCurrent()) return;
+        } else if (!quizReveal) {
+          updateQuizFooter(0);
         }
       } else if (displayMode === 'runningorder') {
         const newRevealed = !!payload.new.results_revealed;

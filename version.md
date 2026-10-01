@@ -8,11 +8,35 @@ Semantic versioning (`MAJOR.MINOR.PATCH`):
 
 Update this file with each change that ships — bump the version, add an entry at the top of the log below. Database migrations are tracked under `migrations/`. The legacy local `friction_pool_schema.sql` remains ignored. Schema entries are flagged (**schema**) as a reminder to apply the matching migration in Supabase.
 
-**Current version: 2.5.3**
+**Current version: 3.0.0**
 
 ---
 
 ## Log
+
+### 3.0.0 — 2026-10-01 (**schema**)
+New session type: **Quiz**. The tutor authors multiple-choice questions (2–6 options, one correct)
+and runs them one at a time from a Quiz panel: show question → students tap once and are locked →
+close answers → reveal tally → reveal answer → next question. Correctness appears on the display
+only; students' phones confirm receipt and never show right or wrong. No scores, names or timers.
+Migration 012 adds `quiz_questions`, `quiz_options`, an admin-only `quiz_answer_keys` and
+`quiz_responses` (unique per device per question per round; anon insert-only), plus
+`sessions.quiz_enabled` / `active_quiz_question_id` / `quiz_reveal`. Answers must target the active
+question. The display reads counts and the answer only through `get_quiz_results`, which returns
+nothing before the reveal (no admin bypass, so a projector in the tutor's signed-in browser can't
+show it early). `student_controls` projects only the active question, so reveal steps send students
+nothing. `create_classroom_session` gains a fifth `p_quiz` argument (old four-argument signature
+dropped); Duplicate, Reset, `session_counts` (new `quiz_count`), delete counts, CSV export (new
+trailing `correct` column), mode/list badges and the G/M/Space guards all cover Quiz.
+`first_install.sql` regenerated. Apply migration 012 before publishing the pages.
+
+### 2.5.4 — 2026-09-28 (**schema**)
+Separate student Realtime controls from the full session row. Migration 011 maintains a
+read-only student-controls projection transactionally, updating it only for response-relevant
+changes. Display settings, media transport and moderation feed revisions no longer notify
+student clients. Preserve initial activity configuration, drafts and reconnect refreshes.
+Apply migration 011 before publishing the student page; refresh existing student tabs.
+Admin, display and presenter pages are unchanged.
 
 ### README.md — 2026-09-25 (docs only, no version bump)
 Brought the README up to date: `index.html` listed as the holding page, the student page now names

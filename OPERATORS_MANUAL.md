@@ -42,6 +42,7 @@ A key that "does nothing" for a session type is safe to press — it's a no-op, 
 | Text markup | ✓ | — | — | ✓ Heatmap → Community highlights |
 | Media Vote | ✓ | — | — | — |
 | Running Order | ✓ | — | — | — |
+| Quiz | ✓ | — | — | — (step through with the Quiz panel buttons) |
 
 Text markup's heatmap has two additional view controls (Solo selections / Colorblind palette) —
 these are buttons next to the heatmap, not keyboard shortcuts. See §4.
@@ -59,7 +60,8 @@ automatically and asks you to sign in again.
 ## 2. The session list
 
 The landing screen after login. Shows every session you've created, newest first, with a badge
-showing **"N active"** (text/text-markup/media-vote sessions) or **"N taps"** (quick-tap sessions).
+showing **"N active"** (text/text-markup/media-vote sessions), **"N taps"** (quick-tap sessions) or
+**"N answers"** (quiz sessions).
 Running Order sessions don't currently update this badge — a busy Running Order session can show
 "0 active" on this screen even with teams working. Open the session to see actual team activity.
 
@@ -118,6 +120,15 @@ students type or scan to join). Pick a **mode**, then fill in the mode-specific 
 - You can keep editing the item list after teams have joined; the live session view will warn you
   when that's happened, since it means any device with the list already open needs to refresh
   before its next move or submit will work (see §6).
+
+### Quiz
+- Add one or more **questions**. Each has its question text, **2–6 options** (lettered A–F, coloured
+  automatically) and exactly one option marked **Correct**. The editor starts each question with four
+  option rows; blank rows are ignored when you create the session.
+- The correct option is never sent to students' devices. It appears on the display only when you
+  reveal the answer.
+- Questions can't be edited once the session is created — use **Duplicate session** if you need a
+  variant (§5).
 
 Click **Create session** to go straight into the live session view.
 
@@ -194,6 +205,27 @@ reveal button described below; it has its own panel with its own **Reveal result
     moves per item, and pairwise reversals across all submitted teams.
 - Before you pick either one, the display shows nothing about team progress — there's no default.
 
+### Quiz: running questions
+
+Quiz is self-contained — it doesn't use the live feed, chart cycling, or the shared reveal button.
+Its panel has a question picker (**Q1**, **Q2**…) and controls for the current question:
+
+1. **Start first question / Next question →** (or click a question in the picker) — shows that
+   question on students' devices and the display, opens answers, and puts the display back to the
+   question itself.
+2. Students tap one option. Each device can answer each question **once**; their phone then says
+   "Answer received (B) — watch the screen." Phones never show whether an answer was right.
+3. **Close answers** — stops further answers (same setting as **Close submissions** in the top bar).
+   **Reopen answers** undoes it.
+4. **Reveal tally** — the display shows how many chose each option, with percentages. Revealing also
+   closes answers.
+5. **Reveal answer** — the display marks the correct option with a ✓ and dims the others.
+   **Question only** takes the display back to the question without the tally.
+
+Your own panel always shows live counts per option and marks the correct option, whatever the
+display is showing. Moving to another question and back keeps earlier answers; students who already
+answered stay locked for that question. Space does nothing in a quiz session.
+
 ### The live feed
 
 New submissions stream in as they arrive (newest first). Each text-response entry has:
@@ -234,8 +266,8 @@ Once results are revealed, **Space** cycles the aggregate view:
 ### Collection, reuse, and export
 
 - **Close submissions / Open submissions** — controls whether students can send responses for every session type. This is independent of **Reveal results**, including Running Order. Close collection before discussing a fixed set of results; reopening keeps existing responses and drafts.
-- **Duplicate session** — opens a form for the new name and unique code. Copies categories, buttons, passage, prompts, story items, and display settings. The new session starts open, unrevealed, and without responses, team claims, active selections, or playback state. A local media file must be selected on the new display.
-- **Export CSV** — downloads collected results for the session, including labels and timestamps. Text markup includes its passage and word-index spans; Media Vote includes transport events; Running Order includes submissions and move history, with superseded teams labelled. Device IDs are not exported. Close submissions first when you need a stable snapshot; export reads may otherwise overlap new responses.
+- **Duplicate session** — opens a form for the new name and unique code. Copies categories, buttons, passage, prompts, story items, quiz questions (with their correct options), and display settings. The new session starts open, unrevealed, and without responses, team claims, active selections, or playback state. A local media file must be selected on the new display.
+- **Export CSV** — downloads collected results for the session, including labels and timestamps. Text markup includes its passage and word-index spans; Media Vote includes transport events; Running Order includes submissions and move history, with superseded teams labelled; Quiz includes each answer with its question, chosen option and a `correct` column (yes/no). Device IDs are not exported. Close submissions first when you need a stable snapshot; export reads may otherwise overlap new responses.
 
 ### Reset and removal
 
@@ -244,7 +276,9 @@ Once results are revealed, **Space** cycles the aggregate view:
   execute. Deletes all collected responses and transport-event history, hides results again, and
   clears any active guided category / active prompt / media transport state. For Running Order,
   this also clears team claims, moves, and submissions — teams need to rejoin with a team name
-  afterward. **Configuration (categories, options, passage, prompts, story items) is untouched** —
+  afterward. For Quiz, it clears all answers and the active question, so the quiz starts again from
+  the waiting screen. **Configuration (categories, options, passage, prompts, story items, quiz
+  questions) is untouched** —
   open student/display tabs reload into a fresh round, with old drafts and vote locks ignored. The current open/closed collection setting is preserved; click **Open submissions** if needed.
 - **Archive / Unarchive** — from the session list (§2); doesn't touch data.
 - **Delete permanently** — top bar or session-list button. Opens a confirmation showing exactly how

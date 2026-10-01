@@ -5,7 +5,7 @@ The application uses one Supabase project and one administrator email per instal
 ## First installation
 
 1. Create a Supabase project. In its API settings, copy the project URL and publishable (or legacy anon) key. Never use a service-role or secret key in the HTML pages.
-2. Download [first_install.sql](first_install.sql). Replace `YOUR_EMAIL_HERE` with the administrator's login email and run the whole file in the Supabase SQL editor. It includes all schema changes through **009 / version 2.3.21**, RLS policies, API grants, and Realtime publication setup in one transaction. It refuses to run with the placeholder or against an existing installation. **Do not also run 001–009.**
+2. Download [first_install.sql](first_install.sql). Replace `YOUR_EMAIL_HERE` with the administrator's login email and run the whole file in the Supabase SQL editor. It includes all schema changes through **012 / version 3.0.0**, RLS policies, API grants, and Realtime publication setup in one transaction. It refuses to run with the placeholder or against an existing installation. **Do not also run 001–012.**
 3. Configure Supabase Auth's Site URL and Redirect URLs for your deployment. Add the full `https://your-host/path/kyomei-admin.html` URL to Redirect URLs; the app requests that page as its magic-link return target. Add your exact localhost admin URL separately for local testing. See [Supabase's redirect documentation](https://supabase.com/docs/guides/auth/redirect-urls).
 4. Configure custom SMTP for classroom use. Supabase's default mailer only delivers to project team members, has restrictive rate limits, and is intended for testing. See [Supabase's SMTP setup](https://supabase.com/docs/guides/auth/auth-smtp). With email signup enabled, the first successful magic-link login creates the administrator's Auth account. If signup is disabled, provision that email in Auth first. Other authenticated emails do not receive administrator permissions.
 5. Fill in `SUPABASE_URL` and `SUPABASE_ANON_KEY` in the CONFIG block of all three application pages. Each page stops with an explanation when these are still placeholders. For mmutube playback only, also configure `KALTURA_PARTNER_ID` and `KALTURA_UICONF_ID` in the display page. Local video files do not require Kaltura.
@@ -15,9 +15,11 @@ The application uses one Supabase project and one administrator email per instal
 ## Existing installation
 
 1. Back up the database and finish any active classes before upgrading.
-2. Apply only the numbered migrations you have not already applied, in ascending order, through `010_fix_ambiguous_category_relationship.sql`. Each numbered upgrade from 002 onward is transactional and can be rerun. Use the current copy of 007: it now handles existing dependent constraints correctly. Migration 007 will reject existing cross-session category/option/prompt references; inspect and correct the offending data before retrying. **If you already applied 007 before 010 existed**, you'll have hit `PGRST` "more than one relationship was found for 'friction_pool' and 'session_categories'" on any admin/display feed load — 007 added a second foreign key alongside the original instead of replacing it. Run 010 to fix it; nothing else needed.
+2. Apply only the numbered migrations you have not already applied, in ascending order, through `012_quiz.sql`. Each numbered upgrade from 002 onward is transactional and can be rerun. Use the current copy of 007: it now handles existing dependent constraints correctly. Migration 007 will reject existing cross-session category/option/prompt references; inspect and correct the offending data before retrying. **If you already applied 007 before 010 existed**, you'll have hit `PGRST` "more than one relationship was found for 'friction_pool' and 'session_categories'" on any admin/display feed load — 007 added a second foreign key alongside the original instead of replacing it. Run 010 to fix it; nothing else needed.
 3. Migration 009 invalidates old markup/ranking editing credentials because they may already have been exposed. It **preserves submitted highlights, teams, orders, and voting data**, but students cannot resume editing those legacy rows. Refresh all student tabs and reset any reused sessions before collecting a new round. New credentials survive refresh and subsequent migration reruns.
-4. Publish the updated pages together and refresh open admin/display/student tabs. Run the deployment checks below.
+4. Migration 011 must be applied before publishing the new student page. It backfills student controls for existing sessions and adds the table to Realtime; students cannot write it directly. Refresh already-open student tabs after publishing, otherwise those tabs retain the old full-session subscription. Student controls preserve the archive read gate: do not rely on archiving to push an immediate shutdown notification; close submissions before archiving when students are connected.
+5. Migration 012 (Quiz, 3.0.0) must be applied before publishing the 3.0.0 pages: the admin page calls the new five-argument `create_classroom_session` and reads `quiz_count` from `session_counts()`. It replaces the four-argument `create_classroom_session`; do not rerun 002 afterwards, or the two signatures will conflict (rerun 012 to repair).
+6. Publish the updated pages together and refresh open admin/display/student tabs. Run the deployment checks below.
 
 Do not run `001_baseline.sql` or `first_install.sql` on an existing database: they contain an administrator placeholder and initial policies. Numbered upgrades preserve your administrator configuration. The ignored legacy `friction_pool_schema.sql` is no longer an installation or upgrade source; use these versioned files.
 
@@ -36,6 +38,7 @@ Do not run `001_baseline.sql` or `first_install.sql` on an existing database: th
 - Create a markup session. Submit highlights, refresh the student page, then edit and submit again. Verify restored ownership and aggregate updates. Reveal, export, and reset from admin.
 - Create a one-vote quick-tap session. Submit once, reload, and confirm another vote from that browser is blocked. Reset and confirm a new vote is accepted.
 - Create a Running Order session. Claim a team, submit an order, refresh, and verify the same browser can resume. Reveal its results.
+- Create a Quiz session with two questions. Start question 1, answer from a student browser, refresh it and confirm it stays locked. Reveal the tally, then the answer, on the display; confirm the student page never shows correctness. Move to question 2 and confirm the student page follows.
 - Archive the sessions. Reload student/display pages and confirm they are unavailable; check archived results still export from admin.
 - If using Media Vote, test playback, pause/seek, voting, and the revealed timeline on the actual classroom browser/projector.
 - Verify Realtime delivery on the deployed Supabase project. Local SQL/DOM checks do not simulate Supabase Realtime or email delivery.
@@ -49,3 +52,18 @@ python3 migrations/build_first_install.py
 ```
 
 The generator needs only Python's standard library and is not used by the browser. Commit the snapshot together with its numbered sources and update its version header when releasing. Local development tests are intentionally not shipped with the template.
+
+## Student-controls deployment checks (011)
+
+- On a student browser, confirm its Postgres Changes subscription targets only `student_controls` for session controls. Admin/display still subscribe to `sessions`.
+- Change chart/layout, reveal, QR visibility, media transport and moderation state; confirm no student-controls events, while the projector still updates.
+- Open/close submissions, change guided category or highlighting prompt, and reset each activity type; verify student UI updates, drafts survive ordinary controls, and reset starts a fresh round.
+- Disconnect a student, change controls, then reconnect; verify current state is restored. Reload an archived session and verify it is unavailable.
+- Reset a text session with several responses: expect one student-controls update for the new round, without one update per removed response. Check actual Supabase Realtime delivery; local tests cannot verify hosted message limits.
+
+## Quiz deployment checks (012)
+
+- As an anonymous client, confirm `quiz_answer_keys` and `quiz_responses` cannot be read, and `get_quiz_results` returns no rows until the tutor reveals the tally.
+- Reveal the tally and answer on a display running in the tutor's signed-in browser: counts and the ✓ must still appear only at the matching step.
+- Reveal steps must not produce `student_controls` updates; changing the active question must produce exactly one.
+- Reset a quiz: answers and the active question clear, and old student tabs reload into the new round.

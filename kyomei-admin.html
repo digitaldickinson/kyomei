@@ -375,6 +375,27 @@
   /* ---- Quick-tap heading ---- */
   .quicktap-heading-display { font-size: 22px; font-weight: 800; margin-bottom: 16px; }
 
+  /* ---- Quiz: question editor (new session) + live panel ---- */
+  #new-session-mode-toggle { flex-wrap: wrap; }
+  .quiz-question-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+  .quiz-question-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .quiz-question-head input { flex: 1; }
+  .quiz-question-number { font-weight: 800; color: var(--muted); flex-shrink: 0; }
+  .quiz-option-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .quiz-option-row input[type="text"] { flex: 1; }
+  .quiz-option-letter { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: 800; color: #fff; flex-shrink: 0; }
+  .quiz-correct-label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); flex-shrink: 0; white-space: nowrap; cursor: pointer; }
+  .quiz-correct-label input { width: auto; padding: 0; margin: 0; }
+  .quiz-small-btn { padding: 6px 10px; font-size: 13px; }
+  .quiz-step-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+  .quiz-step-row button[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .quiz-live-prompt { font-size: 20px; font-weight: 800; margin: 4px 0 12px; }
+  .quiz-live-total { color: var(--muted); font-size: 14px; margin-bottom: 12px; }
+  .quiz-live-options { display: flex; flex-direction: column; gap: 10px; }
+  .quiz-live-options .bar-label { width: 220px; text-align: left; }
+  .quiz-live-options .bar-row.quiz-correct .bar-label { color: var(--ok); }
+  .quiz-live-options .bar-row.quiz-correct .bar-label::after { content: ' ✓'; }
+
   /* ---- Media Vote transport + count ---- */
   .mediavote-player-status { font-size: 13px; font-weight: 700; margin-bottom: 12px; }
   .mediavote-player-status.ready { color: var(--ok); }
@@ -677,12 +698,13 @@
         </div>
         <div class="field">
           <label>Mode</label>
-          <div class="mode-toggle">
+          <div class="mode-toggle" id="new-session-mode-toggle">
             <button type="button" class="active" id="mode-text-btn">Text response</button>
             <button type="button" id="mode-quicktap-btn">Quick-tap buttons</button>
             <button type="button" id="mode-textmarkup-btn">Text markup</button>
             <button type="button" id="mode-mediavote-btn">Media Vote</button>
             <button type="button" id="mode-runningorder-btn">Running Order</button>
+            <button type="button" id="mode-quiz-btn">Quiz</button>
           </div>
         </div>
         <div class="field" id="categories-field">
@@ -775,6 +797,13 @@
             <button class="ghost" id="add-textmarkup-prompt-btn">+ Add</button>
           </div>
           <div id="textmarkup-prompt-error" class="field-error hidden"></div>
+        </div>
+        <div class="field hidden" id="quiz-field">
+          <label class="field-subheading">Questions</label>
+          <div id="new-quiz-question-list"></div>
+          <button class="ghost" type="button" id="add-quiz-question-btn">+ Add question</button>
+          <div class="muted quicktap-hint">2–6 options per question. Mark the correct option — it only ever appears on the display, once you reveal it.</div>
+          <div id="quiz-error" class="field-error hidden"></div>
         </div>
         <button class="primary" id="create-session-btn">Create session</button>
       </div>
@@ -898,6 +927,28 @@
             <option value="">Select a team…</option>
           </select>
           <button class="ghost" type="button" id="runningorder-aggregate-btn">Aggregate view</button>
+        </div>
+      </div>
+
+      <div id="quiz-panel" class="hidden">
+        <div id="quiz-question-picker" class="category-picker-row"></div>
+        <div class="panel">
+          <div id="quiz-waiting-status" class="hidden-status">Pick a question above to show it to students</div>
+          <div id="quiz-live" class="hidden">
+            <div class="muted" id="quiz-live-position"></div>
+            <div class="quiz-live-prompt" id="quiz-live-prompt"></div>
+            <div class="quiz-live-total" id="quiz-live-total"></div>
+            <div class="quiz-live-options" id="quiz-live-options"></div>
+            <div class="quiz-step-row" id="quiz-reveal-row" role="group" aria-label="What the display shows">
+              <button class="ghost" type="button" data-reveal="">Question only</button>
+              <button class="ghost" type="button" data-reveal="tally">Reveal tally</button>
+              <button class="ghost" type="button" data-reveal="answer">Reveal answer</button>
+            </div>
+          </div>
+          <div class="quiz-step-row">
+            <button class="ghost" type="button" id="quiz-answers-toggle-btn">Close answers</button>
+            <button class="primary" type="button" id="quiz-next-btn">Next question →</button>
+          </div>
         </div>
       </div>
 
@@ -1141,6 +1192,12 @@ function showListScreen() {
   rankingSubmissions = [];
   activeRankingTeamId = null;
   rankingViewMode = null;
+  quizQuestions = [];
+  quizOptions = [];
+  quizAnswerKeys = new Map();
+  quizCounts = {};
+  quizActiveQuestionId = null;
+  quizReveal = null;
   joinInfoShown = false;
   loadSessionList();
 }
@@ -1170,6 +1227,7 @@ function teardownSessionView() {
   teardownMediaVoteSubscription();
   teardownMediaSessionRowSubscription();
   teardownRunningOrderSubscription();
+  teardownQuizSubscription();
   stopMediaVotePositionTicker();
 }
 function renderCollectionControl() {
@@ -1177,18 +1235,21 @@ function renderCollectionControl() {
   const button = document.getElementById('collection-toggle-btn');
   button.textContent = open ? 'Close submissions' : 'Open submissions';
   button.setAttribute('aria-pressed', String(!open));
+  if (currentSession && currentSession.quiz_enabled) renderQuizControls();
 }
-document.getElementById('collection-toggle-btn').addEventListener('click', async event => {
+// Shared by the top-bar button and the Quiz panel's Close/Reopen answers
+// button — both write the same submissions_open column.
+async function toggleSubmissionsOpen(button) {
   if (!currentSession) return;
   const sessionId = currentSession.id;
   const open = currentSession.submissions_open === false;
-  const button = event.currentTarget;
   button.disabled = true;
   const { error } = await supabaseClient.from('sessions').update({ submissions_open: open }).eq('id', sessionId);
   button.disabled = false;
   if (error) { showError('Could not change collection state: ' + error.message); return; }
   if (currentSession && currentSession.id === sessionId) { currentSession.submissions_open = open; renderCollectionControl(); }
-});
+}
+document.getElementById('collection-toggle-btn').addEventListener('click', event => toggleSubmissionsOpen(event.currentTarget));
 let duplicateSourceId = null;
 const duplicateDialog = document.getElementById('duplicate-session-dialog');
 document.getElementById('duplicate-session-btn').addEventListener('click', () => {
@@ -1217,7 +1278,7 @@ document.getElementById('duplicate-session-form').addEventListener('submit', asy
 async function fetchAllSessionRows(table, sessionId) {
   const rows = [];
   for (let offset = 0; ; offset += 500) {
-    const { data, error } = await supabaseClient.from(table).select(table === 'text_markup_responses' ? 'id,session_id,prompt_id,spans,updated_at,response_epoch' : '*').eq('session_id', sessionId).order('id').range(offset, offset + 499);
+    const { data, error } = await supabaseClient.from(table).select(table === 'text_markup_responses' ? 'id,session_id,prompt_id,spans,updated_at,response_epoch' : '*').eq('session_id', sessionId).order(table === 'quiz_answer_keys' ? 'question_id' : 'id').range(offset, offset + 499);
     if (error) throw error;
     rows.push(...data);
     if (data.length < 500) return rows;
@@ -1243,26 +1304,31 @@ function csvCell(value) {
   return '"' + text.replace(/"/g, '""') + '"';
 }
 function makeResultsCsv(session, tables) {
-  const columns = ['session_code', 'session_name', 'record_type', 'id', 'created_at', 'status', 'category', 'scenario', 'option', 'prompt', 'passage_text', 'passage_locale', 'spans', 'team', 'final_order', 'moved_item', 'swapped_with_item', 'action', 'position_ms'];
+  const columns = ['session_code', 'session_name', 'record_type', 'id', 'created_at', 'status', 'category', 'scenario', 'option', 'prompt', 'passage_text', 'passage_locale', 'spans', 'team', 'final_order', 'moved_item', 'swapped_with_item', 'action', 'position_ms', 'correct'];
   const categories = new Map((tables.session_categories || []).map(r => [r.id, r.label]));
   const options = new Map((tables.quick_tap_options || []).map(r => [r.id, r.label]));
   const prompts = new Map((tables.text_markup_prompts || []).map(r => [r.id, r.prompt_text]));
   const items = new Map((tables.ranking_items || []).map(r => [r.id, r.label]));
   const teams = new Map((tables.ranking_teams || []).map(r => [r.id, r]));
+  const quizPrompts = new Map((tables.quiz_questions || []).map(r => [r.id, r.prompt_text]));
+  const quizLabels = new Map((tables.quiz_options || []).map(r => [r.id, r.label]));
+  const quizKeys = new Map((tables.quiz_answer_keys || []).map(r => [r.question_id, r.option_id]));
   const rows = [columns.map(csvCell).join(',')];
-  for (const table of ['friction_pool','quick_tap_responses','text_markup_responses','media_vote_responses','media_transport_events','ranking_submissions','ranking_moves']) {
+  for (const table of ['friction_pool','quick_tap_responses','text_markup_responses','media_vote_responses','media_transport_events','ranking_submissions','ranking_moves','quiz_responses']) {
     for (const row of tables[table] || []) {
       const team = teams.get(row.team_id);
       const record = {
         session_code: session.session_code, session_name: session.name, record_type: table,
         id: row.id, created_at: row.created_at || row.updated_at || row.submitted_at,
         status: team ? (team.superseded ? 'superseded' : 'current') : row.status,
-        category: categories.get(row.category_id), scenario: row.scenario, option: options.get(row.option_id),
-        prompt: prompts.get(row.prompt_id), passage_text: table === 'text_markup_responses' ? session.passage_text : null,
+        category: categories.get(row.category_id), scenario: row.scenario,
+        option: table === 'quiz_responses' ? quizLabels.get(row.option_id) : options.get(row.option_id),
+        prompt: table === 'quiz_responses' ? quizPrompts.get(row.question_id) : prompts.get(row.prompt_id), passage_text: table === 'text_markup_responses' ? session.passage_text : null,
         passage_locale: table === 'text_markup_responses' ? session.passage_locale : null, spans: row.spans, team: team && team.team_name,
         final_order: row.final_order && row.final_order.map(id => items.get(id) || id),
         moved_item: items.get(row.moved_item_id), swapped_with_item: items.get(row.swapped_with_item_id),
-        action: row.action, position_ms: row.position_ms
+        action: row.action, position_ms: row.position_ms,
+        correct: table === 'quiz_responses' ? (quizKeys.get(row.question_id) === row.option_id ? 'yes' : 'no') : null
       };
       rows.push(columns.map(column => csvCell(record[column])).join(','));
     }
@@ -1275,7 +1341,8 @@ document.getElementById('export-session-btn').addEventListener('click', async ev
   button.disabled = true;
   button.textContent = 'Exporting…';
   try {
-    const names = session.running_order_enabled ? ['ranking_items','ranking_teams','ranking_submissions','ranking_moves']
+    const names = session.quiz_enabled ? ['quiz_questions','quiz_options','quiz_answer_keys','quiz_responses']
+      : session.running_order_enabled ? ['ranking_items','ranking_teams','ranking_submissions','ranking_moves']
       : session.text_markup_enabled ? ['text_markup_prompts','text_markup_responses']
       : session.media_vote_enabled ? ['quick_tap_options','media_vote_responses','media_transport_events']
       : session.quick_tap_enabled ? ['quick_tap_options','quick_tap_responses'] : ['session_categories','friction_pool'];
@@ -1394,10 +1461,12 @@ async function loadSessionList() {
 
   const countMap = {};
   const tapCountMap = {};
+  const quizCountMap = {};
   if (!countsError && counts) {
     for (const row of counts) {
       countMap[row.session_id] = row.active_count;
       tapCountMap[row.session_id] = row.tap_count;
+      quizCountMap[row.session_id] = row.quiz_count;
     }
   }
 
@@ -1406,7 +1475,10 @@ async function loadSessionList() {
     const row = document.createElement('div');
     row.className = s.archived ? 'session-row archived' : 'session-row';
     row.id = `session-row-${s.id}`;
-    const badgeText = s.quick_tap_enabled
+    const quizAnswerCount = Number(quizCountMap[s.id] || 0);
+    const badgeText = s.quiz_enabled
+      ? `${quizAnswerCount} answer${quizAnswerCount === 1 ? '' : 's'}`
+      : s.quick_tap_enabled
       ? `${tapCountMap[s.id] || 0} taps`
       : `${countMap[s.id] || 0} active`;
     row.innerHTML = `
@@ -1555,6 +1627,7 @@ function escapeHtml(str) {
 let newCategories = [];
 let newQuickTapOptions = [];
 let newTextMarkupPrompts = [];
+let newQuizQuestions = [];
 let newSessionMode = 'text';
 let selectedQuickTapColor = QUICKTAP_PALETTE[0];
 let newMediaVoteSourceType = 'local';
@@ -1595,6 +1668,7 @@ function setNewSessionMode(mode) {
   document.getElementById('mode-textmarkup-btn').classList.toggle('active', mode === 'textmarkup');
   document.getElementById('mode-mediavote-btn').classList.toggle('active', mode === 'mediavote');
   document.getElementById('mode-runningorder-btn').classList.toggle('active', mode === 'runningorder');
+  document.getElementById('mode-quiz-btn').classList.toggle('active', mode === 'quiz');
   document.getElementById('categories-field').classList.toggle('hidden', mode !== 'text');
   // Media Vote reuses this exact field — same options list, same add/
   // remove/colour component, writing to the same quick_tap_options table —
@@ -1607,6 +1681,7 @@ function setNewSessionMode(mode) {
   document.getElementById('quicktap-options-label').textContent =
     mode === 'mediavote' ? 'Vote options (2–10)' : 'Quick-tap options (2–10)';
   document.getElementById('textmarkup-field').classList.toggle('hidden', mode !== 'textmarkup');
+  document.getElementById('quiz-field').classList.toggle('hidden', mode !== 'quiz');
 }
 
 document.getElementById('mode-text-btn').addEventListener('click', () => setNewSessionMode('text'));
@@ -1614,6 +1689,7 @@ document.getElementById('mode-quicktap-btn').addEventListener('click', () => set
 document.getElementById('mode-textmarkup-btn').addEventListener('click', () => setNewSessionMode('textmarkup'));
 document.getElementById('mode-mediavote-btn').addEventListener('click', () => setNewSessionMode('mediavote'));
 document.getElementById('mode-runningorder-btn').addEventListener('click', () => setNewSessionMode('runningorder'));
+document.getElementById('mode-quiz-btn').addEventListener('click', () => setNewSessionMode('quiz'));
 
 function resetNewSessionForm() {
   document.getElementById('new-session-name').value = '';
@@ -1634,12 +1710,15 @@ function resetNewSessionForm() {
   document.getElementById('textmarkup-passage-error').classList.add('hidden');
   document.getElementById('textmarkup-prompt-error').classList.add('hidden');
   document.getElementById('mediavote-entry-error').classList.add('hidden');
+  document.getElementById('quiz-error').classList.add('hidden');
   document.getElementById('new-one-vote-checkbox').checked = false;
   document.getElementById('new-guided-checkbox').checked = false;
   newCategories = [];
   newQuickTapOptions = [];
   newTextMarkupPrompts = [];
+  newQuizQuestions = [newQuizQuestion()];
   selectedQuickTapColor = QUICKTAP_PALETTE[0];
+  renderQuizQuestionEditor();
   renderCategoryChips();
   renderQuickTapChips();
   renderColorPicker();
@@ -1816,6 +1895,124 @@ document.getElementById('new-textmarkup-locale-select').addEventListener('change
   document.getElementById('textmarkup-locale-other-field').classList.toggle('hidden', e.target.value !== 'other');
 });
 
+// ---- Quiz question editor ----
+// Plain objects edited in place: {prompt, options: [label, ...], correct}.
+// Colours come from QUICKTAP_PALETTE by option position at creation time.
+const QUIZ_MAX_OPTIONS = 6;
+function newQuizQuestion() {
+  return { prompt: '', options: ['', '', '', ''], correct: null };
+}
+function quizLetter(index) { return String.fromCharCode(65 + index); }
+
+function renderQuizQuestionEditor() {
+  const listEl = document.getElementById('new-quiz-question-list');
+  listEl.innerHTML = '';
+  newQuizQuestions.forEach((question, qIndex) => {
+    const card = document.createElement('div');
+    card.className = 'quiz-question-card';
+
+    const head = document.createElement('div');
+    head.className = 'quiz-question-head';
+    const number = document.createElement('span');
+    number.className = 'quiz-question-number';
+    number.textContent = `Q${qIndex + 1}`;
+    const promptInput = document.createElement('input');
+    promptInput.type = 'text';
+    promptInput.placeholder = 'Question, e.g. Who usually writes the headline?';
+    promptInput.value = question.prompt;
+    promptInput.setAttribute('aria-label', `Question ${qIndex + 1}`);
+    promptInput.addEventListener('input', () => { question.prompt = promptInput.value; });
+    const removeQuestion = document.createElement('button');
+    removeQuestion.type = 'button';
+    removeQuestion.className = 'ghost quiz-small-btn';
+    removeQuestion.textContent = 'Remove';
+    removeQuestion.disabled = newQuizQuestions.length <= 1;
+    removeQuestion.setAttribute('aria-label', `Remove question ${qIndex + 1}`);
+    removeQuestion.addEventListener('click', () => {
+      newQuizQuestions.splice(qIndex, 1);
+      renderQuizQuestionEditor();
+    });
+    head.append(number, promptInput, removeQuestion);
+    card.appendChild(head);
+
+    question.options.forEach((label, oIndex) => {
+      const row = document.createElement('div');
+      row.className = 'quiz-option-row';
+      const letter = document.createElement('span');
+      letter.className = 'quiz-option-letter';
+      letter.style.backgroundColor = QUICKTAP_PALETTE[oIndex % QUICKTAP_PALETTE.length];
+      letter.textContent = quizLetter(oIndex);
+      const optionInput = document.createElement('input');
+      optionInput.type = 'text';
+      optionInput.placeholder = `Option ${quizLetter(oIndex)}`;
+      optionInput.value = label;
+      optionInput.setAttribute('aria-label', `Question ${qIndex + 1}, option ${quizLetter(oIndex)}`);
+      optionInput.addEventListener('input', () => { question.options[oIndex] = optionInput.value; });
+      const correctLabel = document.createElement('label');
+      correctLabel.className = 'quiz-correct-label';
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = `quiz-correct-${qIndex}`;
+      radio.checked = question.correct === oIndex;
+      radio.addEventListener('change', () => { question.correct = oIndex; });
+      correctLabel.append(radio, document.createTextNode('Correct'));
+      const removeOption = document.createElement('button');
+      removeOption.type = 'button';
+      removeOption.className = 'ghost quiz-small-btn';
+      removeOption.innerHTML = '&times;';
+      removeOption.disabled = question.options.length <= 2;
+      removeOption.setAttribute('aria-label', `Remove option ${quizLetter(oIndex)}`);
+      removeOption.addEventListener('click', () => {
+        question.options.splice(oIndex, 1);
+        if (question.correct === oIndex) question.correct = null;
+        else if (question.correct !== null && question.correct > oIndex) question.correct--;
+        renderQuizQuestionEditor();
+      });
+      row.append(letter, optionInput, correctLabel, removeOption);
+      card.appendChild(row);
+    });
+
+    const addOption = document.createElement('button');
+    addOption.type = 'button';
+    addOption.className = 'ghost quiz-small-btn';
+    addOption.textContent = '+ Add option';
+    addOption.disabled = question.options.length >= QUIZ_MAX_OPTIONS;
+    addOption.addEventListener('click', () => {
+      question.options.push('');
+      renderQuizQuestionEditor();
+    });
+    card.appendChild(addOption);
+    listEl.appendChild(card);
+  });
+}
+
+document.getElementById('add-quiz-question-btn').addEventListener('click', () => {
+  newQuizQuestions.push(newQuizQuestion());
+  renderQuizQuestionEditor();
+});
+
+// Returns an error message, or null with the cleaned payload in `out`.
+// Blank option rows are dropped (the editor starts with four); the correct
+// mark follows its option through that compaction.
+function buildQuizPayload(questions, out) {
+  if (questions.length === 0) return 'Add at least one question.';
+  for (const [qIndex, question] of questions.entries()) {
+    const n = `Question ${qIndex + 1}`;
+    if (!question.prompt.trim()) return `${n} needs its question text.`;
+    const kept = question.options.map((label, index) => ({ label: label.trim(), index })).filter(o => o.label);
+    if (kept.length < 2) return `${n} needs at least 2 options.`;
+    if (new Set(kept.map(o => o.label)).size !== kept.length) return `${n} has two options with the same text.`;
+    const correct = kept.findIndex(o => o.index === question.correct);
+    if (correct < 0) return `${n} needs a correct option marked.`;
+    out.push({
+      prompt: question.prompt.trim(),
+      options: kept.map((o, i) => ({ label: o.label, color: QUICKTAP_PALETTE[i % QUICKTAP_PALETTE.length] })),
+      correct
+    });
+  }
+  return null;
+}
+
 function validateSessionCode(code) {
   return /^[A-Za-z0-9_-]+$/.test(code);
 }
@@ -1845,6 +2042,8 @@ document.getElementById('create-session-btn').addEventListener('click', async ()
   const textmarkupPromptError = document.getElementById('textmarkup-prompt-error');
   const textmarkupPassage = document.getElementById('new-textmarkup-passage').value.trim();
   const mediaEntryError = document.getElementById('mediavote-entry-error');
+  const quizError = document.getElementById('quiz-error');
+  const quizPayload = [];
   let mediaEntryId = null;
 
   let hasError = false;
@@ -1919,6 +2118,11 @@ document.getElementById('create-session-btn').addEventListener('click', async ()
     } else {
       textmarkupPromptError.classList.add('hidden');
     }
+  } else if (newSessionMode === 'quiz') {
+    const message = buildQuizPayload(newQuizQuestions, quizPayload);
+    quizError.textContent = message || '';
+    quizError.classList.toggle('hidden', !message);
+    if (message) hasError = true;
   }
 
   if (hasError) return;
@@ -1952,11 +2156,13 @@ document.getElementById('create-session-btn').addEventListener('click', async ()
       media_vote_enabled: newSessionMode === 'mediavote',
       media_source_type: newSessionMode === 'mediavote' ? newMediaVoteSourceType : null,
       media_entry_id: (newSessionMode === 'mediavote' && newMediaVoteSourceType === 'mmutube') ? mediaEntryId : null,
-      running_order_enabled: newSessionMode === 'runningorder'
+      running_order_enabled: newSessionMode === 'runningorder',
+      quiz_enabled: newSessionMode === 'quiz'
     },
     p_categories: newSessionMode === 'text' ? newCategories : [],
     p_options: ['quicktap', 'mediavote'].includes(newSessionMode) ? newQuickTapOptions : [],
-    p_prompts: newSessionMode === 'textmarkup' ? newTextMarkupPrompts : []
+    p_prompts: newSessionMode === 'textmarkup' ? newTextMarkupPrompts : [],
+    p_quiz: newSessionMode === 'quiz' ? quizPayload : []
   }).single();
   btn.disabled = false;
 
@@ -2006,7 +2212,15 @@ function updateRevealUI() {
   const isTextMarkup = !!(currentSession && !currentSession.quick_tap_enabled && !currentSession.running_order_enabled && currentSession.text_markup_enabled);
   const isMediaVote = !!(currentSession && !currentSession.quick_tap_enabled && !currentSession.text_markup_enabled && !currentSession.running_order_enabled && currentSession.media_vote_enabled);
   const isRunningOrder = !!(currentSession && currentSession.running_order_enabled);
-  if (isTextMarkup) {
+  const isQuiz = !!(currentSession && currentSession.quiz_enabled);
+  if (isQuiz) {
+    // Quiz has its own per-question reveal (quiz_reveal) in the Quiz panel;
+    // none of the shared results containers apply.
+    grid.classList.add('hidden');
+    tmCount.classList.add('hidden');
+    mvTimeline.classList.add('hidden');
+    hiddenStatus.classList.add('hidden');
+  } else if (isTextMarkup) {
     grid.classList.add('hidden');
     mvTimeline.classList.add('hidden');
     const wasHidden = tmCount.classList.contains('hidden');
@@ -2082,12 +2296,13 @@ function updateShortcutsPanel() {
   if (!currentSession) return;
 
   const isRunningOrder = !!currentSession.running_order_enabled;
-  const isQuickTap = !isRunningOrder && !!currentSession.quick_tap_enabled;
-  const isTextMarkup = !isRunningOrder && !isQuickTap && !!currentSession.text_markup_enabled;
-  const isMediaVote = !isRunningOrder && !isQuickTap && !isTextMarkup && !!currentSession.media_vote_enabled;
-  const isGuided = !isRunningOrder && !isQuickTap && !isTextMarkup && !isMediaVote && !!currentSession.guided_categories;
-  const feedGroupedApplies = !isRunningOrder && !isQuickTap && !isTextMarkup && !isMediaVote && !isGuided;
-  const feedMasonryApplies = !isRunningOrder && !isQuickTap && !isTextMarkup && !isMediaVote;
+  const isQuiz = !isRunningOrder && !!currentSession.quiz_enabled;
+  const isQuickTap = !isRunningOrder && !isQuiz && !!currentSession.quick_tap_enabled;
+  const isTextMarkup = !isRunningOrder && !isQuiz && !isQuickTap && !!currentSession.text_markup_enabled;
+  const isMediaVote = !isRunningOrder && !isQuiz && !isQuickTap && !isTextMarkup && !!currentSession.media_vote_enabled;
+  const isGuided = !isRunningOrder && !isQuiz && !isQuickTap && !isTextMarkup && !isMediaVote && !!currentSession.guided_categories;
+  const feedGroupedApplies = !isRunningOrder && !isQuiz && !isQuickTap && !isTextMarkup && !isMediaVote && !isGuided;
+  const feedMasonryApplies = !isRunningOrder && !isQuiz && !isQuickTap && !isTextMarkup && !isMediaVote;
 
   document.getElementById('shortcut-state-l').textContent = joinInfoShown ? 'Shown' : 'Hidden';
 
@@ -3384,16 +3599,17 @@ async function enterSession(session) {
   updateJoinInfoBadge();
 
   const isRunningOrder = !!session.running_order_enabled;
-  const isQuickTap = !isRunningOrder && !!session.quick_tap_enabled;
-  const isTextMarkup = !isRunningOrder && !isQuickTap && !!session.text_markup_enabled;
-  const isMediaVote = !isRunningOrder && !isQuickTap && !isTextMarkup && !!session.media_vote_enabled;
-  const isGuided = !isRunningOrder && !isQuickTap && !isTextMarkup && !isMediaVote && !!session.guided_categories;
+  const isQuiz = !isRunningOrder && !!session.quiz_enabled;
+  const isQuickTap = !isRunningOrder && !isQuiz && !!session.quick_tap_enabled;
+  const isTextMarkup = !isRunningOrder && !isQuiz && !isQuickTap && !!session.text_markup_enabled;
+  const isMediaVote = !isRunningOrder && !isQuiz && !isQuickTap && !isTextMarkup && !!session.media_vote_enabled;
+  const isGuided = !isRunningOrder && !isQuiz && !isQuickTap && !isTextMarkup && !isMediaVote && !!session.guided_categories;
 
   // feed_grouped only ever applies to plain (non-guided, non-quicktap,
   // non-textmarkup, non-mediavote, non-runningorder) text-response sessions
   // — text markup, media vote, and running order have no friction_pool-
   // based feed at all, same restriction as the g-key guard.
-  const feedGroupedApplies = !isRunningOrder && !isQuickTap && !isTextMarkup && !isMediaVote && !isGuided;
+  const feedGroupedApplies = !isRunningOrder && !isQuiz && !isQuickTap && !isTextMarkup && !isMediaVote && !isGuided;
   feedViewMode = (feedGroupedApplies && session.feed_grouped) ? 'grouped' : 'chronological';
   plainFeedCategories = null;
   if (feedViewMode === 'grouped') {
@@ -3408,25 +3624,26 @@ async function enterSession(session) {
   // It restyles the projected display's feed into a masonry wall, not
   // admin's own feed, which keeps Park/Delete usable rather than squeezed
   // into a narrow column.
-  const feedMasonryApplies = !isRunningOrder && !isQuickTap && !isTextMarkup && !isMediaVote;
+  const feedMasonryApplies = !isRunningOrder && !isQuiz && !isQuickTap && !isTextMarkup && !isMediaVote;
   feedMasonryOn = feedMasonryApplies && !!session.feed_masonry;
   updateFeedMasonryIndicator();
 
   document.getElementById('results-heading').textContent =
     isQuickTap ? 'Live results' : (isTextMarkup ? 'Text markup responses' : 'Live feed');
-  document.getElementById('results-heading').classList.toggle('hidden', isMediaVote || isRunningOrder);
+  document.getElementById('results-heading').classList.toggle('hidden', isMediaVote || isRunningOrder || isQuiz);
   document.getElementById('quicktap-results-controls').classList.toggle('hidden', !(isQuickTap || isTextMarkup || isMediaVote));
   document.getElementById('guided-category-picker').classList.toggle('hidden', !isGuided);
   document.getElementById('textmarkup-prompt-picker').classList.toggle('hidden', !isTextMarkup);
   document.getElementById('mediavote-panel').classList.toggle('hidden', !isMediaVote);
   document.getElementById('runningorder-panel').classList.toggle('hidden', !isRunningOrder);
+  document.getElementById('quiz-panel').classList.toggle('hidden', !isQuiz);
 
   // Park/unpark only applies to friction_pool-based sessions (plain text or
   // guided) — same gate as feedGroupedApplies above.
   showingParked = false;
   document.getElementById('parked-list').classList.add('hidden');
   document.getElementById('parked-empty').classList.add('hidden');
-  document.getElementById('parked-toggle-btn').classList.toggle('hidden', isRunningOrder || isQuickTap || isTextMarkup || isMediaVote);
+  document.getElementById('parked-toggle-btn').classList.toggle('hidden', isRunningOrder || isQuiz || isQuickTap || isTextMarkup || isMediaVote);
   parkedCount = 0;
   updateParkedCountBadge();
 
@@ -3459,6 +3676,24 @@ async function enterSession(session) {
     resultsRevealed = !!session.results_revealed;
     updateRevealUI();
     setupRunningOrderSubscription();
+  } else if (isQuiz) {
+    document.getElementById('feed').classList.add('hidden');
+    document.getElementById('feed-empty').classList.add('hidden');
+    document.getElementById('guided-waiting-status').classList.add('hidden');
+    document.getElementById('textmarkup-waiting-status').classList.add('hidden');
+    document.getElementById('textmarkup-compare-row').classList.add('hidden');
+
+    quizActiveQuestionId = session.active_quiz_question_id || null;
+    quizReveal = session.quiz_reveal || null;
+    quizCounts = {};
+    await loadQuizContent();
+  if (!entryIsCurrent()) return;
+    renderQuizPicker();
+    renderQuizLive();
+    updateRevealUI();
+    await loadQuizCounts();
+  if (!entryIsCurrent()) return;
+    setupQuizSubscription();
   } else if (isQuickTap) {
     document.getElementById('feed').classList.add('hidden');
     document.getElementById('feed-empty').classList.add('hidden');
@@ -3579,12 +3814,16 @@ async function enterSession(session) {
 function updateModeBadge() {
   const badge = document.getElementById('session-mode-badge');
   const isRunningOrder = !!currentSession.running_order_enabled;
-  const isQuickTap = !isRunningOrder && !!currentSession.quick_tap_enabled;
-  const isTextMarkup = !isRunningOrder && !isQuickTap && !!currentSession.text_markup_enabled;
-  const isMediaVote = !isRunningOrder && !isQuickTap && !isTextMarkup && !!currentSession.media_vote_enabled;
-  const isGuided = !isRunningOrder && !isQuickTap && !isTextMarkup && !isMediaVote && !!currentSession.guided_categories;
+  const isQuiz = !isRunningOrder && !!currentSession.quiz_enabled;
+  const isQuickTap = !isRunningOrder && !isQuiz && !!currentSession.quick_tap_enabled;
+  const isTextMarkup = !isRunningOrder && !isQuiz && !isQuickTap && !!currentSession.text_markup_enabled;
+  const isMediaVote = !isRunningOrder && !isQuiz && !isQuickTap && !isTextMarkup && !!currentSession.media_vote_enabled;
+  const isGuided = !isRunningOrder && !isQuiz && !isQuickTap && !isTextMarkup && !isMediaVote && !!currentSession.guided_categories;
 
-  if (isRunningOrder) {
+  if (isQuiz) {
+    const n = quizQuestions.length;
+    badge.textContent = `Quiz · ${n} question${n === 1 ? '' : 's'}`;
+  } else if (isRunningOrder) {
     const n = rankingItems.length;
     badge.textContent = `Running order · ${n} item${n === 1 ? '' : 's'}`;
   } else if (isQuickTap) {
@@ -4027,6 +4266,233 @@ document.getElementById('refresh-session-btn').addEventListener('click', async (
   btn.textContent = originalText;
 });
 
+// ---------------- Quiz mode ----------------
+// The tutor's screen always shows live per-option counts and the correct
+// option. What the room sees is driven by active_quiz_question_id +
+// quiz_reveal (display) and submissions_open (students).
+let quizQuestions = [];
+let quizOptions = [];
+let quizAnswerKeys = new Map(); // question_id -> correct option_id
+let quizCounts = {}; // option_id -> answers, across every question this round
+let quizActiveQuestionId = null;
+let quizReveal = null; // null | 'tally' | 'answer'
+let quizChannel = null;
+let quizReconnectTimer = null;
+
+async function loadQuizContent() {
+  const requestIsCurrent = beginViewRequest('loadQuizContent');
+  const [questions, options, keys] = await Promise.all([
+    supabaseClient.from('quiz_questions').select('*').eq('session_id', currentSession.id).order('sort_order', { ascending: true }),
+    supabaseClient.from('quiz_options').select('*').eq('session_id', currentSession.id).order('sort_order', { ascending: true }),
+    supabaseClient.from('quiz_answer_keys').select('*').eq('session_id', currentSession.id)
+  ]);
+  if (!requestIsCurrent()) return;
+  const error = questions.error || options.error || keys.error;
+  if (error) {
+    handleQueryError(error);
+    return;
+  }
+  quizQuestions = questions.data || [];
+  quizOptions = options.data || [];
+  quizAnswerKeys = new Map((keys.data || []).map(key => [key.question_id, key.option_id]));
+}
+
+async function loadQuizCounts() {
+  const requestIsCurrent = beginViewRequest('loadQuizCounts', () => currentSession && JSON.stringify([currentSession.id, currentSession.response_epoch]));
+  let rows;
+  try {
+    rows = await fetchAllRows(() => supabaseClient
+      .from('quiz_responses')
+      .select('id, option_id')
+      .eq('session_id', currentSession.id)
+      .order('id'));
+  } catch (error) {
+    // Keep the last successful counts on screen rather than blanking them.
+    console.error('loadQuizCounts failed', error);
+    return;
+  }
+  if (!requestIsCurrent()) return;
+  quizCounts = {};
+  for (const row of rows) quizCounts[row.option_id] = (quizCounts[row.option_id] || 0) + 1;
+  renderQuizLive();
+}
+
+function renderQuizPicker() {
+  const picker = document.getElementById('quiz-question-picker');
+  picker.innerHTML = '';
+  quizQuestions.forEach((question, index) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'category-pick-btn' + (question.id === quizActiveQuestionId ? ' active' : '');
+    btn.textContent = `Q${index + 1}`;
+    btn.title = question.prompt_text;
+    btn.setAttribute('aria-label', `Question ${index + 1}: ${question.prompt_text}`);
+    btn.addEventListener('click', () => setActiveQuizQuestion(question.id));
+    picker.appendChild(btn);
+  });
+}
+
+function renderQuizLive() {
+  const index = quizQuestions.findIndex(question => question.id === quizActiveQuestionId);
+  const question = quizQuestions[index];
+  document.getElementById('quiz-waiting-status').classList.toggle('hidden', !!question);
+  document.getElementById('quiz-live').classList.toggle('hidden', !question);
+  if (question) {
+    document.getElementById('quiz-live-position').textContent = `Question ${index + 1} of ${quizQuestions.length}`;
+    document.getElementById('quiz-live-prompt').textContent = question.prompt_text;
+    const options = quizOptions.filter(option => option.question_id === question.id);
+    const correctId = quizAnswerKeys.get(question.id);
+    const counts = options.map(option => quizCounts[option.id] || 0);
+    const total = counts.reduce((sum, count) => sum + count, 0);
+    const max = Math.max(0, ...counts);
+    document.getElementById('quiz-live-total').textContent = `${total} answer${total === 1 ? '' : 's'}`;
+    const list = document.getElementById('quiz-live-options');
+    list.innerHTML = '';
+    options.forEach((option, i) => {
+      const row = document.createElement('div');
+      row.className = 'bar-row' + (option.id === correctId ? ' quiz-correct' : '');
+      row.innerHTML = `
+        <div class="bar-label">${quizLetter(i)}. ${escapeHtml(option.label)}</div>
+        <div class="bar-track"><div class="bar-fill" style="background:${option.color || '#5b8cff'};width:${max > 0 ? (counts[i] / max) * 100 : 0}%"></div></div>
+        <div class="bar-count">${counts[i]}</div>
+      `;
+      list.appendChild(row);
+    });
+  }
+  renderQuizControls();
+}
+
+function renderQuizControls() {
+  const open = currentSession && currentSession.submissions_open !== false;
+  document.getElementById('quiz-answers-toggle-btn').textContent = open ? 'Close answers' : 'Reopen answers';
+  for (const btn of document.querySelectorAll('#quiz-reveal-row button')) {
+    btn.setAttribute('aria-pressed', String((btn.dataset.reveal || null) === quizReveal));
+  }
+  const index = quizQuestions.findIndex(question => question.id === quizActiveQuestionId);
+  const next = document.getElementById('quiz-next-btn');
+  const isLast = index >= 0 && index === quizQuestions.length - 1;
+  next.disabled = isLast || quizQuestions.length === 0;
+  next.textContent = index < 0 ? 'Start first question' : isLast ? 'Last question' : 'Next question →';
+}
+
+// Showing a question always starts it fresh: answers open, display back to
+// the question itself. One update, so students and the display agree.
+async function setActiveQuizQuestion(questionId) {
+  if (!currentSession) return;
+  const previous = { id: quizActiveQuestionId, reveal: quizReveal, open: currentSession.submissions_open };
+  quizActiveQuestionId = questionId;
+  quizReveal = null;
+  currentSession.submissions_open = true;
+  renderQuizPicker();
+  renderQuizLive();
+  renderCollectionControl();
+
+  const { error } = await supabaseClient
+    .from('sessions')
+    .update({ active_quiz_question_id: questionId, quiz_reveal: null, submissions_open: true })
+    .eq('id', currentSession.id);
+
+  if (error) {
+    quizActiveQuestionId = previous.id;
+    quizReveal = previous.reveal;
+    currentSession.submissions_open = previous.open;
+    renderQuizPicker();
+    renderQuizLive();
+    renderCollectionControl();
+    handleQueryError(error);
+    return;
+  }
+  currentSession.active_quiz_question_id = questionId;
+  currentSession.quiz_reveal = null;
+}
+
+async function setQuizReveal(reveal) {
+  if (!currentSession || !quizActiveQuestionId) return;
+  const previous = { reveal: quizReveal, open: currentSession.submissions_open };
+  const update = { quiz_reveal: reveal };
+  // Revealing closes answers — nobody should answer after the room has
+  // seen the tally. Going back to the question leaves them as they are.
+  if (reveal) update.submissions_open = false;
+  quizReveal = reveal;
+  if (reveal) currentSession.submissions_open = false;
+  renderCollectionControl();
+  renderQuizControls();
+
+  const { error } = await supabaseClient
+    .from('sessions')
+    .update(update)
+    .eq('id', currentSession.id);
+
+  if (error) {
+    quizReveal = previous.reveal;
+    currentSession.submissions_open = previous.open;
+    renderCollectionControl();
+    renderQuizControls();
+    handleQueryError(error);
+    return;
+  }
+  currentSession.quiz_reveal = reveal;
+}
+
+for (const btn of document.querySelectorAll('#quiz-reveal-row button')) {
+  btn.addEventListener('click', () => setQuizReveal(btn.dataset.reveal || null));
+}
+document.getElementById('quiz-answers-toggle-btn').addEventListener('click', event => toggleSubmissionsOpen(event.currentTarget));
+document.getElementById('quiz-next-btn').addEventListener('click', () => {
+  const index = quizQuestions.findIndex(question => question.id === quizActiveQuestionId);
+  const next = quizQuestions[index + 1];
+  if (next) setActiveQuizQuestion(next.id);
+});
+
+function setupQuizSubscription() {
+  teardownQuizSubscription();
+
+  const channel = supabaseClient
+    .channel(`quiz_responses_${currentSession.id}`)
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'quiz_responses',
+      filter: `session_id=eq.${currentSession.id}`
+    }, (payload) => {
+      quizCounts[payload.new.option_id] = (quizCounts[payload.new.option_id] || 0) + 1;
+      if (payload.new.question_id === quizActiveQuestionId) renderQuizLive();
+    })
+    .subscribe((status) => {
+      // See setupFeedSubscription: ignore callbacks from a replaced channel.
+      if (quizChannel !== channel) return;
+      const banner = document.getElementById('connection-banner');
+      if (status === 'SUBSCRIBED') {
+        banner.classList.add('hidden');
+        // Recount on every (re)subscribe so answers made while disconnected
+        // are not missed.
+        loadQuizCounts();
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        banner.classList.remove('hidden');
+        scheduleQuizReconnect();
+      }
+    });
+
+  quizChannel = channel;
+}
+
+function scheduleQuizReconnect() {
+  if (quizReconnectTimer) return;
+  quizReconnectTimer = setTimeout(() => {
+    quizReconnectTimer = null;
+    if (currentSession && currentSession.quiz_enabled && !screens.sessionView.classList.contains('hidden')) {
+      setupQuizSubscription();
+    }
+  }, 3000);
+}
+
+function teardownQuizSubscription() {
+  const channel = quizChannel, timer = quizReconnectTimer;
+  quizChannel = null;
+  quizReconnectTimer = null;
+  releaseSubscription(channel, timer);
+}
+
 // ---------------- Running Order mode ----------------
 let rankingItems = [];
 let rankingTeams = [];
@@ -4372,6 +4838,19 @@ document.getElementById('reset-session-btn').addEventListener('click', async () 
 let pendingDeleteSession = null;
 
 async function fetchDeleteImpactCounts(session) {
+  if (session.quiz_enabled) {
+    const [responses, questions] = await Promise.all([
+      supabaseClient.from('quiz_responses').select('id', { count: 'exact', head: true }).eq('session_id', session.id),
+      supabaseClient.from('quiz_questions').select('id', { count: 'exact', head: true }).eq('session_id', session.id)
+    ]);
+    return {
+      responseCount: responses.count || 0,
+      responseLabel: 'answers',
+      itemCount: questions.count || 0,
+      itemLabel: 'questions'
+    };
+  }
+
   if (session.quick_tap_enabled) {
     const [responses, options] = await Promise.all([
       supabaseClient.from('quick_tap_responses').select('*', { count: 'exact', head: true }).eq('session_id', session.id),
@@ -4873,7 +5352,7 @@ document.addEventListener('keydown', (e) => {
   const tag = document.activeElement && document.activeElement.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA') return;
   if (!currentSession || screens.sessionView.classList.contains('hidden')) return;
-  const isPlainTextSession = !currentSession.quick_tap_enabled && !currentSession.guided_categories && !currentSession.text_markup_enabled && !currentSession.media_vote_enabled && !currentSession.running_order_enabled;
+  const isPlainTextSession = !currentSession.quick_tap_enabled && !currentSession.guided_categories && !currentSession.text_markup_enabled && !currentSession.media_vote_enabled && !currentSession.running_order_enabled && !currentSession.quiz_enabled;
   if (!isPlainTextSession) return;
   e.preventDefault();
   toggleFeedViewMode();
@@ -4921,7 +5400,7 @@ document.addEventListener('keydown', (e) => {
   if (!currentSession || screens.sessionView.classList.contains('hidden')) return;
   // Layout, not grouping — applies to any friction_pool-based feed (plain
   // or guided), unlike G which needs more than one category to matter.
-  const hasFrictionPoolFeed = !currentSession.quick_tap_enabled && !currentSession.text_markup_enabled && !currentSession.media_vote_enabled && !currentSession.running_order_enabled;
+  const hasFrictionPoolFeed = !currentSession.quick_tap_enabled && !currentSession.text_markup_enabled && !currentSession.media_vote_enabled && !currentSession.running_order_enabled && !currentSession.quiz_enabled;
   if (!hasFrictionPoolFeed) return;
   e.preventDefault();
   toggleFeedMasonry();
@@ -5451,6 +5930,8 @@ document.addEventListener('keydown', (e) => {
   // rather than falling through to cycleChartType(), which has no
   // quick_tap_options to cycle for this session type.
   if (currentSession && currentSession.running_order_enabled) return;
+  // Quiz has no keyboard shortcut in this pass — same explicit early return.
+  if (currentSession && currentSession.quiz_enabled) return;
   if (currentSession && currentSession.text_markup_enabled && !currentSession.quick_tap_enabled) {
     cycleTextMarkupChartType();
   } else {
